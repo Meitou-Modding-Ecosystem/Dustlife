@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Dustlife's balance runner (port step 3, RivalryCore#29). Author: PZA. Licence: GPLv3 or later. Plays a map for weeks of game time in
+    seconds and reports who grows, who dies out, and the lore checks. Not part of the mod; the map file stays outside the repo.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Dustlife.Balance</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Dustlife/Dustlife.csproj" />
+  </ItemGroup>
+
+</Project>

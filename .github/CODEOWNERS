@@ -1,0 +1,7 @@
+# Owners must approve PRs touching their paths. Later lines win.
+# Any one member of the team can give the code-owner approval.
+
+*                         @Meitou-Modding-Ecosystem/super-maintainers
+
+/Dustlife/                @PZA-Mods-bot @Meitou-Modding-Ecosystem/super-maintainers
+/Dustlife.Tests/          @PZA-Mods-bot @Meitou-Modding-Ecosystem/super-maintainers

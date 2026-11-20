@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Dustlife (A-Life for Kenshi) for Meitou. Author: PZA. Licence: GPLv3 or later. War, territory and economy off screen (design:
+    Meitou-Modding-Ecosystem/RivalryCore docs/dustlife.md, #29). Built against the game's assemblies, never copied: the game loads them.
+  -->
+
+  <PropertyGroup>
+    <AssemblyName>Dustlife</AssemblyName>
+    <RootNamespace>Dustlife</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(MeitouEngineDir)src/Meitou.Core/Meitou.Core.csproj" Private="false" />
+    <ProjectReference Include="$(MeitouEngineDir)src/Meitou.Data/Meitou.Data.csproj" Private="false" />
+    <ProjectReference Include="$(MeitouEngineDir)src/Meitou.Simulation/Meitou.Simulation.csproj" Private="false" />
+    <ProjectReference Include="$(MeitouEngineDir)src/Meitou.Game/Meitou.Game.csproj" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="meitou.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

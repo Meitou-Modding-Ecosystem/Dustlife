@@ -1,0 +1,14 @@
+<Solution>
+  <Project Path="Play/Play.csproj" />
+  <Folder Name="/Dustlife/">
+    <Project Path="Dustlife/Dustlife.csproj" />
+    <Project Path="Dustlife.Balance/Dustlife.Balance.csproj" />
+    <Project Path="Dustlife.Tests/Dustlife.Tests.csproj" />
+  </Folder>
+  <Folder Name="/engine/">
+    <Project Path="engine/src/Meitou.Core/Meitou.Core.csproj" />
+    <Project Path="engine/src/Meitou.Data/Meitou.Data.csproj" />
+    <Project Path="engine/src/Meitou.Game/Meitou.Game.csproj" />
+    <Project Path="engine/src/Meitou.Simulation/Meitou.Simulation.csproj" />
+  </Folder>
+</Solution>
