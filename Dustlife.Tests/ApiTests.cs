@@ -24,11 +24,31 @@ public sealed class ApiTests
 
     static void Attach(World? w) => Api.GetMethod("Attach", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [w]);
 
+    static long NewWorld() => (long)Api.GetMethod("NewWorld", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [])!;
+
+    [Fact]
+    public void A_new_world_clears_the_last_worlds_war_even_with_Dustlife_off()
+    {
+        // TWR's probe (2026-11-20): after a world whose Dustlife system never started, Active stayed true with the last world's news
+        var w = new World();
+        w.AddFaction("hn", "Holy Nation", false, false);
+        w.StartNew();
+        Attach(w);
+        long before = Get<long>("Generation");
+        Assert.True(Get<bool>("Active"));
+
+        long next = NewWorld();                                         // the next world's system is made (Dustlife off: it never attaches)
+        Assert.Equal(before + 1, next);
+        Assert.Equal(next, Get<long>("Generation"));
+        Assert.False(Get<bool>("Active"));
+        Assert.Empty(Get<IReadOnlyList<IReadOnlyDictionary<string, object>>>("News", 0L));
+    }
+
     [Fact]
     public void Another_mod_finds_it_reads_it_and_gets_plain_answers()
     {
         Assert.NotNull(Api);
-        Assert.Equal(1, Get<int>("Version"));
+        Assert.Equal(2, Get<int>("Version"));
         Assert.True(Get<bool>("IsDustlifeSquad", "dustlife:12"));
         Assert.False(Get<bool>("IsDustlifeSquad", (string?)null));
 
@@ -58,6 +78,8 @@ public sealed class ApiTests
             Assert.Empty(Get<IReadOnlyList<IReadOnlyDictionary<string, object>>>("News", (long)row["Seq"]));
             Assert.Equal("hn", Get<string>("Holder", "Stack"));
             Assert.Equal("hn", Get<string>("Holder", "site-1"));
+            Assert.Equal("hn", Get<string>("Holder", "town:site-1"));
+            Assert.Equal("town:site-1", row["Node"]);
             Assert.Equal("base", Get<IReadOnlyList<IReadOnlyDictionary<string, object>>>("Places")[0]["Kind"]);
         }
         finally

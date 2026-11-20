@@ -20,6 +20,8 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
     Squads? _squads;
     EngineSquads? _host;
     Core.World? _war;
+    /// <summary>A new world clears the API at once, Dustlife on or off (a disabled world must not show the last world's war).</summary>
+    readonly long _generation = DustlifeApi.NewWorld();
     GameRelations? _rel;
     readonly TownWatch _watch = new();
     long _newsSeq;
