@@ -14,17 +14,28 @@ public sealed class EngineSquads(Meitou.Simulation.World world, PopulationSystem
     /// <summary>A squad is placed this far at most from the band (a ring round it, never outside).</summary>
     public const float SpawnRing = 600;
 
+    /// <summary>Why the last spawn was refused, for the log ("" when it wasn't).</summary>
+    public string LastRefusal { get; private set; } = "";
+
     public int Spawn(int faction, string template, int home, Vector2 at, Vector2 goal, string tag)
     {
-        if (faction < 0 || faction >= gameFaction.Length || gameFaction[faction] < 0) return -1;
+        if (faction < 0 || faction >= gameFaction.Length || gameFaction[faction] < 0) return Refuse($"faction {faction} has no game faction");
         int site = siteOfPlace.TryGetValue(home, out int s) ? s : siteOfPlace.Values.DefaultIfEmpty(-1).First();
-        if (site < 0) return -1;
+        if (site < 0) return Refuse($"no game town for place {home}");
         int id = population.SpawnPlatoon(world, gameFaction[faction], template, site, at, 0, SpawnRing);
-        if (id < 0 || world.Platoons.Find(id) is not { } platoon) return -1;
+        if (id < 0) return Refuse($"the game would not spawn {template} at town {site}");
+        if (world.Platoons.Find(id) is not { } platoon) return Refuse($"squad {id} not found after its spawn");
+        LastRefusal = "";
         platoon.ModTag = tag;
         PopulationSystem.HoldPlatoon(world, id, true);
         PopulationSystem.SendPlatoon(world, id, goal);
         return id;
+    }
+
+    int Refuse(string why)
+    {
+        LastRefusal = why;
+        return -1;
     }
 
     public void Send(int squad, Vector2 goal) => PopulationSystem.SendPlatoon(world, squad, goal);

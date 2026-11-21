@@ -26,6 +26,7 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
     readonly TownWatch _watch = new();
     readonly WastelandLink _twr = new();
     bool _twrSaid;
+    int _summaryDay = -1;
     long _newsSeq;
     byte[]? _pendingSave;
     bool _failed;
@@ -48,6 +49,23 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
         int steps = _war.Advance(world.GameHours, _rel);
         if (steps > 0 && _squads != null && _host != null) _squads.Sync(_war, _host, _war.PlayerPos);
         News();
+        Summary(world.GameHours);
+    }
+
+    /// <summary>Once a game day, what the hand-over and the TWR link did (every rule logs when it fires, and why it didn't).</summary>
+    void Summary(double hours)
+    {
+        int day = (int)(hours / 24);
+        if (day == _summaryDay) return;
+        bool first = _summaryDay < 0;
+        _summaryDay = day;
+        if (first) return;
+        string squads = _squads == null
+            ? (settings.RealSquads ? "real squads: off (the game's population system was not found)" : "real squads: off (setting)")
+            : _squads.Summary(_host?.LastRefusal);
+        log($"day {day}: {squads}");
+        if (settings.WastelandNews)
+            log($"day {day}: The Wasteland Remembers: {(_twr.Bound ? "linked" : "not found")}, {_twr.Sent} sent, {_twr.Refused} refused (repeats), {_twr.Capped} held back, {_twr.Failed} failed");
     }
 
     /// <summary>

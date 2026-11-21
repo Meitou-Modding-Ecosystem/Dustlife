@@ -31,7 +31,7 @@ place name (`Report`, API 2); source `dustlife`; at most 6 reports per world ste
 
 | Dustlife news | TWR kind | Weight |
 | --- | --- | --- |
-| `took` / `took_<motive>` (taken from another faction) | `town-fell`, faction = the taker | 80 base, 65 resource point, 45 territory |
+| `took` / `took_<motive>` (taken from another faction), or `hold_*` within 72 game hours of `overrun` by another faction than the old holder (most falls come in these two steps; 0.4.4) | `town-fell`, faction = the taker | 80 base, 65 resource point, 45 territory |
 | `siege_end` | `siege-broken` | 55 |
 | `march`, `raid` | `war-march`, `war-raid`, with Dustlife's line | as above |
 

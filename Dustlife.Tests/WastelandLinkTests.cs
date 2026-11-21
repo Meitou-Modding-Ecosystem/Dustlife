@@ -161,6 +161,41 @@ public sealed class WastelandLinkTests
     }
 
     [Fact]
+    public void A_place_settled_soon_after_its_defenders_were_overrun_has_fallen_to_the_settler()
+    {
+        // the 2026-11-21 headless run: ten days of overruns and not one town-fell, because a fall is an overrun and then a settling
+        TwrApi4.Calls.Clear();
+        TwrApi4.Answer = true;
+        var (w, _, b) = War();
+        var link = new WastelandLink(() => typeof(TwrApi4));
+        var overrun = Emit(w, EventType.Lost, -1, 1, b.Id, 2, "overrun", b.Name, "Shek Kingdom");
+        var settled = Emit(w, EventType.Capture, 0, -1, b.Id, 2, "hold_settle", "Holy Nation", b.Name) with { Time = overrun.Time + 10 };
+        Assert.Equal(1, link.Forward(w, [overrun, settled]));
+        Assert.Equal(["node|town:2222-rebirth.mod|town-fell|Holy Nation||65|dustlife"], TwrApi4.Calls);
+    }
+
+    [Fact]
+    public void An_overrun_retaken_by_its_own_holder_or_settled_much_later_is_no_fall()
+    {
+        TwrApi4.Calls.Clear();
+        TwrApi4.Answer = true;
+        var (w, a, b) = War();
+        var link = new WastelandLink(() => typeof(TwrApi4));
+        WorldEvent[] own =
+        [
+            Emit(w, EventType.Lost, -1, 1, b.Id, 2, "overrun", b.Name, "Shek Kingdom"),
+            Emit(w, EventType.Capture, 1, -1, b.Id, 2, "hold", "Shek Kingdom", b.Name),          // the Shek walk back in
+        ];
+        Assert.Equal(0, link.Forward(w, own));
+
+        var lost = Emit(w, EventType.Lost, -1, 1, a.Id, 3, "overrun", a.Name, "Shek Kingdom");
+        Assert.Equal(0, link.Forward(w, [lost]));                                                // the overrun alone tells nothing
+        var late = Emit(w, EventType.Capture, 0, -1, a.Id, 3, "hold", "Holy Nation", a.Name) with { Time = lost.Time + WastelandLink.FallHours + 1 };
+        Assert.Equal(0, link.Forward(w, [late]));
+        Assert.Empty(TwrApi4.Calls);
+    }
+
+    [Fact]
     public void A_big_day_sends_at_most_the_cap()
     {
         TwrApi4.Calls.Clear();

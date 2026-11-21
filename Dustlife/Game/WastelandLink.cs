@@ -9,14 +9,21 @@ namespace Dustlife.Game;
 /// read by reflection (TWR's <c>interop/MODDER_API.md</c>), so neither mod depends on the other: with TWR missing, too old or not ready,
 /// nothing is sent and nothing throws. A place goes by its node <c>town:&lt;placement id&gt;</c> (<c>ReportAtNode</c>, TWR's API 4),
 /// else by its name (<c>Report</c>, API 2). Sent: a place taken from another faction ("town-fell"), a siege given up ("siege-broken"), and
-/// a march or raid on a place (with Dustlife's own line). Not sent: the game's own town changes (TWR sees those itself), places settled
-/// while empty, and events with no place. TWR takes the same kind at the same place once in 12 game hours, whoever reports it.
+/// a march or raid on a place (with Dustlife's own line). Most falls come in two steps, the defenders overrun and the place settled by the
+/// winner a little later: that settling is sent as the fall when it comes within <see cref="FallHours"/> of the overrun and the settler is
+/// not the old holder. Not sent: the game's own town changes (TWR sees those itself), the overrun alone, empty places settled with no
+/// overrun before, and events with no place. TWR takes the same kind at the same place once in 12 game hours, whoever reports it.
 /// </summary>
 public sealed class WastelandLink(Func<Type?>? find = null)
 {
     public const string Source = "dustlife";
     /// <summary>At most this many reports per world step (a big battle day must not drown the board).</summary>
     public const int MaxPerStep = 6;
+    /// <summary>A place settled within this many game hours of its defenders being overrun has fallen to the settler.</summary>
+    public const double FallHours = 72;
+
+    /// <summary>Places whose defenders were overrun: when, and who held them (Dustlife's faction index).</summary>
+    readonly Dictionary<int, (double Hours, int Holder)> _overrun = [];
 
     readonly Func<Type?> _find = find ?? FindTwr;
     MethodInfo? _atNode, _byName;
@@ -62,13 +69,32 @@ public sealed class WastelandLink(Func<Type?>? find = null)
         };
     }
 
+    /// <summary>A place settled soon after its defenders were overrun, by someone else than its old holder: the fall, or null.</summary>
+    (string Kind, string Text, int Weight)? SettledAfterOverrun(World w, WorldEvent e)
+    {
+        if (e.Type != EventType.Capture || e.B >= 0 || !e.Key.StartsWith("hold", StringComparison.Ordinal)) return null;
+        if (!_overrun.Remove(e.Place, out var o) || e.Time - o.Hours > FallHours || e.Time < o.Hours || o.Holder == e.A) return null;
+        if (w.PlaceById(e.Place) == null) return null;
+        return ("town-fell", "", e.Importance >= 3 ? 80 : e.Importance == 2 ? 65 : 45);
+    }
+
     /// <summary>Sends one step's new events (oldest first); returns how many TWR took.</summary>
     public int Forward(World w, IEnumerable<WorldEvent> fresh)
     {
         int sent = 0, tried = 0;
         foreach (var e in fresh)
         {
-            if (Map(w, e) is not { } m)
+            if (e.Type == EventType.Lost && e.Key == "overrun" && e.Place >= 0)
+            {
+                _overrun[e.Place] = (e.Time, e.B);
+                Skipped++;
+                continue;
+            }
+
+            var mapped = Map(w, e);
+            int taker = e.A;
+            if (mapped == null && SettledAfterOverrun(w, e) is { } fell) mapped = fell;
+            if (mapped is not { } m)
             {
                 Skipped++;
                 continue;
@@ -83,7 +109,7 @@ public sealed class WastelandLink(Func<Type?>? find = null)
 
             tried++;
             var p = w.PlaceById(e.Place)!;
-            string faction = m.Kind == "town-fell" && e.A >= 0 && e.A < w.Factions.Count ? w.Factions[e.A].Name : "";
+            string faction = m.Kind == "town-fell" && taker >= 0 && taker < w.Factions.Count ? w.Factions[taker].Name : "";
             try
             {
                 bool ok = _atNode != null
