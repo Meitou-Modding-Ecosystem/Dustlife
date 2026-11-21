@@ -24,6 +24,8 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
     readonly long _generation = DustlifeApi.NewWorld();
     GameRelations? _rel;
     readonly TownWatch _watch = new();
+    readonly WastelandLink _twr = new();
+    bool _twrSaid;
     long _newsSeq;
     byte[]? _pendingSave;
     bool _failed;
@@ -104,11 +106,21 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
     void News()
     {
         if (_war == null) return;
+        List<WorldEvent>? fresh = null;
         foreach (var e in _war.Events)
         {
             if (e.Seq <= _newsSeq) continue;
             _newsSeq = e.Seq;
             if (settings.NewsInLog && e.Importance >= 2) log(_war.Say(e));
+            (fresh ??= []).Add(e);
+        }
+
+        if (fresh == null || !settings.WastelandNews) return;
+        _twr.Forward(_war, fresh);
+        if (_twr.Bound && !_twrSaid)
+        {
+            _twrSaid = true;
+            log("war news goes to The Wasteland Remembers' news board");
         }
     }
 
@@ -158,6 +170,9 @@ public sealed class DustlifeSettings
 
     [Setting("Hub theatre", Hint = "The Shek and the Holy Nation raid each other's mines, farms and ruins round the Hub (a test: off by default).")]
     public bool HubTheatre { get; set; }
+
+    [Setting("War news for The Wasteland Remembers", Hint = "With The Wasteland Remembers installed, towns near a fight talk about it: places taken, sieges given up, marches and raids.")]
+    public bool WastelandNews { get; set; } = true;
 
     [Setting("War news in the log", Hint = "Writes the war's bigger events to the game's log.")]
     public bool NewsInLog { get; set; } = true;
