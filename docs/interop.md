@@ -36,4 +36,4 @@ place name (`Report`, API 2); source `dustlife`; at most 6 reports per world ste
 | `march`, `raid` | `war-march`, `war-raid`, with Dustlife's line | as above |
 
 Not sent: `hold_*` (an empty place settled), `town_changed` / `town_emptied` (TWR sees the game's own town changes itself), and news with
-no place. TWR takes the same kind at the same place once in 12 game hours, whoever reports it.
+no place. TWR takes the same kind at the same place once in 12 game hours, whoever reports it. Overruns still waiting for their settling are kept in the save (0.4.5), so a fall that straddles a save and load is reported once, as in uninterrupted play.

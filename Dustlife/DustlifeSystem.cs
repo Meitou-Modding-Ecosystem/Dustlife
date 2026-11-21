@@ -82,9 +82,11 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
             {
                 try
                 {
-                    var map = WorldSave.Read(_war, new MemoryStream(_pendingSave));
+                    var ms = new MemoryStream(_pendingSave);
+                    var map = WorldSave.Read(_war, ms);
                     loaded = true;
-                    log($"war loaded: {_war.Bands.Count} bands, {map.MissingPlaces} saved places and {map.MissingFactions} factions no longer in the world");
+                    int waiting = ReadLink(ms);
+                    log($"war loaded: {_war.Bands.Count} bands, {map.MissingPlaces} saved places and {map.MissingFactions} factions no longer in the world, {waiting} overruns waiting for their settling");
                 }
                 catch (InvalidDataException e)
                 {
@@ -118,6 +120,20 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
             _war = null;
             _failed = true;
             DustlifeApi.Attach(null);
+        }
+    }
+
+    /// <summary>The TWR link's waiting overruns, after the war in the save; a damaged section keeps none (the war itself is already read).</summary>
+    int ReadLink(MemoryStream ms)
+    {
+        try
+        {
+            return _twr.Read(ms, _war!);
+        }
+        catch (Exception e) when (e is InvalidDataException or EndOfStreamException or IOException)
+        {
+            log($"the save's waiting overruns could not be read ({e.Message}): none kept");
+            return 0;
         }
     }
 
@@ -156,6 +172,7 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
     {
         if (_war == null) return;
         WorldSave.Write(_war, stream);
+        _twr.Write(stream, _war);
     }
 
     /// <summary>

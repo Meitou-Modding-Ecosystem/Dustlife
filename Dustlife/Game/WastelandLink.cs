@@ -1,5 +1,6 @@
 // Dustlife (A-Life for Kenshi) for Meitou. Author: PZA. Licence: GPLv3 or later.
 using System.Reflection;
+using System.Text;
 using Dustlife.Core;
 
 namespace Dustlife.Game;
@@ -77,6 +78,61 @@ public sealed class WastelandLink(Func<Type?>? find = null)
         if (w.PlaceById(e.Place) == null) return null;
         return ("town-fell", "", e.Importance >= 3 ? 80 : e.Importance == 2 ? 65 : 45);
     }
+
+    #region Saving
+
+    const uint SaveMagic = 0x5754_4C44;                                          // "DLTW"
+    const int SaveVersion = 1;
+    const int MaxSaved = 10000;
+
+    /// <summary>
+    /// The overruns still waiting for their settling, by the place's and the old holder's stable keys (placement id, faction id) and the game
+    /// hour, so a fall that straddles a save and load is reported as in uninterrupted play (prd's review of Dustlife #2).
+    /// </summary>
+    public void Write(Stream stream, World w)
+    {
+        using var bw = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        var rows = _overrun.Where(e => w.PlaceById(e.Key) != null).OrderBy(e => e.Key).Take(MaxSaved).ToList();
+        bw.Write(SaveMagic);
+        bw.Write(SaveVersion);
+        bw.Write(rows.Count);
+        foreach (var (place, (hours, holder)) in rows)
+        {
+            bw.Write(w.PlaceById(place)!.Key);
+            bw.Write(holder >= 0 && holder < w.Factions.Count ? w.Factions[holder].Key : "");
+            bw.Write(hours);
+        }
+    }
+
+    /// <summary>
+    /// Reads what <see cref="Write"/> wrote; a save from before 0.4.5 has nothing here and keeps none. Places and factions no longer in the world,
+    /// and times that are not finite, are dropped. Returns how many were kept.
+    /// </summary>
+    public int Read(Stream stream, World w)
+    {
+        _overrun.Clear();
+        if (stream.Length - stream.Position < 12) return 0;
+        using var br = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
+        if (br.ReadUInt32() != SaveMagic || br.ReadInt32() != SaveVersion) return 0;
+        int count = br.ReadInt32();
+        if (count < 0 || count > MaxSaved) throw new InvalidDataException($"{count} saved overruns");
+        var rows = new List<(string Place, string Holder, double Hours)>();
+        for (int i = 0; i < count; i++) rows.Add((br.ReadString(), br.ReadString(), br.ReadDouble()));
+        foreach (var (placeKey, holderKey, hours) in rows)
+        {
+            if (!double.IsFinite(hours) || w.Places.Find(p => p.Key == placeKey) is not { } p) continue;
+            int holder = holderKey.Length == 0 ? -1 : w.Factions.FindIndex(f => f.Key == holderKey);
+            if (holderKey.Length > 0 && holder < 0) continue;
+            _overrun[p.Id] = (hours, holder);
+        }
+
+        return _overrun.Count;
+    }
+
+    /// <summary>The overruns waiting for their settling (for the tests and the log).</summary>
+    public int Pending => _overrun.Count;
+
+    #endregion
 
     /// <summary>Sends one step's new events (oldest first); returns how many TWR took.</summary>
     public int Forward(World w, IEnumerable<WorldEvent> fresh)

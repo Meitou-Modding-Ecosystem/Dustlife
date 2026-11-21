@@ -196,6 +196,60 @@ public sealed class WastelandLinkTests
     }
 
     [Fact]
+    public void A_fall_that_straddles_a_save_and_load_is_still_reported()
+    {
+        // prd's review of Dustlife #2: overrun, save, load, then a settling by another faction within 72 hours. Uninterrupted play reports
+        // one fall, and so must the loaded game.
+        TwrApi4.Calls.Clear();
+        TwrApi4.Answer = true;
+        var (w, _, b) = War();
+        var before = new WastelandLink(() => typeof(TwrApi4));
+        var overrun = Emit(w, EventType.Lost, -1, 1, b.Id, 2, "overrun", b.Name, "Shek Kingdom");
+        Assert.Equal(0, before.Forward(w, [overrun]));
+
+        var save = new MemoryStream();
+        WorldSave.Write(w, save);
+        before.Write(save, w);
+
+        var (loaded, _, lb) = War();
+        save.Position = 0;
+        WorldSave.Read(loaded, save);
+        var after = new WastelandLink(() => typeof(TwrApi4));
+        Assert.Equal(1, after.Read(save, loaded));
+
+        var settled = Emit(loaded, EventType.Capture, 0, -1, lb.Id, 2, "hold_settle", "Holy Nation", lb.Name) with { Time = overrun.Time + 10 };
+        Assert.Equal(1, after.Forward(loaded, [settled]));
+        Assert.Equal(["node|town:2222-rebirth.mod|town-fell|Holy Nation||65|dustlife"], TwrApi4.Calls);
+    }
+
+    [Fact]
+    public void An_old_or_damaged_save_keeps_no_waiting_overruns()
+    {
+        var (w, _, b) = War();
+        var link = new WastelandLink(() => typeof(TwrApi4));
+        Assert.Equal(0, link.Read(new MemoryStream(), w));                                 // a save from before 0.4.5: nothing after the war
+        Assert.Equal(0, link.Read(new MemoryStream([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]), w));   // not the section's magic
+
+        var bad = new MemoryStream();
+        using (var bw = new BinaryWriter(bad, System.Text.Encoding.UTF8, leaveOpen: true))
+        {
+            bw.Write(0x5754_4C44u);
+            bw.Write(1);
+            bw.Write(-5);
+        }
+        bad.Position = 0;
+        Assert.Throws<InvalidDataException>(() => link.Read(bad, w));
+
+        var gone = new MemoryStream();
+        link.Forward(w, [Emit(w, EventType.Lost, -1, 1, b.Id, 2, "overrun", b.Name, "Shek Kingdom")]);
+        link.Write(gone, w);
+        var (other, _, _) = War();
+        other.Places.RemoveAll(p => p.Key == "2222-rebirth.mod");
+        gone.Position = 0;
+        Assert.Equal(0, new WastelandLink(() => typeof(TwrApi4)).Read(gone, other));      // the place is no longer in the world
+    }
+
+    [Fact]
     public void A_big_day_sends_at_most_the_cap()
     {
         TwrApi4.Calls.Clear();
