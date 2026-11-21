@@ -1,0 +1,6 @@
+# Meitou's releases stamp their assemblies with the game's version (0.21.0.0, 0.22.1.0...), but the engine submodule builds as 1.0.0.0, and
+# .NET never binds a reference to 1.0.0.0 to an older assembly: the game then can't load the mod's types and says "entry type ... is not
+# in its assemblies" (found 2026-11-21 in a headless run). Every build of this repo (dotnet build / test / publish, CI included) stamps
+# the engine as the lowest Meitou the mod supports, so its references bind to that release and every newer one. Keep it at meitou.json's
+# gameVersion floor.
+-p:AssemblyVersion=0.21.0.0
