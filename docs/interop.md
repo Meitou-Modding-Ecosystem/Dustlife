@@ -22,3 +22,18 @@ bool active = (bool)api!.GetProperty("Active")!.GetValue(null)!;
 News keys worth knowing: `took_<motive>` / `hold_<motive>` (a place taken, with its reason: doctrine, counter, retaliation, food, arms,
 lifeline, grievance, opportunity, settle, patrol), `took` / `hold` (no reason recorded), `march`, `claim`, `raid`, `siege_end`, `overrun`,
 `resurgence`, `town_changed` / `town_emptied` (the game changed a town), `battle`, `rout`.
+
+## Dustlife tells The Wasteland Remembers (0.4.2)
+
+With The Wasteland Remembers installed, Dustlife reports its war to TWR's news board through `WastelandApi` (by reflection: neither mod
+depends on the other), so the towns near a fight talk about it. By node (`ReportAtNode("town:<placement id>", ...)`, TWR's API 4), else by
+place name (`Report`, API 2); source `dustlife`; at most 6 reports per world step. Setting: "War news for The Wasteland Remembers" (on).
+
+| Dustlife news | TWR kind | Weight |
+| --- | --- | --- |
+| `took` / `took_<motive>` (taken from another faction), or `hold_*` within 72 game hours of `overrun` by another faction than the old holder (most falls come in these two steps; 0.4.4) | `town-fell`, faction = the taker | 80 base, 65 resource point, 45 territory |
+| `siege_end` | `siege-broken` | 55 |
+| `march`, `raid` | `war-march`, `war-raid`, with Dustlife's line | as above |
+
+Not sent: `hold_*` (an empty place settled), `town_changed` / `town_emptied` (TWR sees the game's own town changes itself), and news with
+no place. TWR takes the same kind at the same place once in 12 game hours, whoever reports it. Overruns still waiting for their settling are kept in the save (0.4.5), so a fall that straddles a save and load is reported once, as in uninterrupted play.

@@ -24,6 +24,9 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
     readonly long _generation = DustlifeApi.NewWorld();
     GameRelations? _rel;
     readonly TownWatch _watch = new();
+    readonly WastelandLink _twr = new();
+    bool _twrSaid;
+    int _summaryDay = -1;
     long _newsSeq;
     byte[]? _pendingSave;
     bool _failed;
@@ -46,6 +49,23 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
         int steps = _war.Advance(world.GameHours, _rel);
         if (steps > 0 && _squads != null && _host != null) _squads.Sync(_war, _host, _war.PlayerPos);
         News();
+        Summary(world.GameHours);
+    }
+
+    /// <summary>Once a game day, what the hand-over and the TWR link did (every rule logs when it fires, and why it didn't).</summary>
+    void Summary(double hours)
+    {
+        int day = (int)(hours / 24);
+        if (day == _summaryDay) return;
+        bool first = _summaryDay < 0;
+        _summaryDay = day;
+        if (first) return;
+        string squads = _squads == null
+            ? (settings.RealSquads ? "real squads: off (the game's population system was not found)" : "real squads: off (setting)")
+            : _squads.Summary(_host?.LastRefusal);
+        log($"day {day}: {squads}");
+        if (settings.WastelandNews)
+            log($"day {day}: The Wasteland Remembers: {(_twr.Bound ? "linked" : "not found")}, {_twr.Sent} sent, {_twr.Refused} refused (repeats), {_twr.Capped} held back, {_twr.Failed} failed");
     }
 
     /// <summary>
@@ -62,9 +82,11 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
             {
                 try
                 {
-                    var map = WorldSave.Read(_war, new MemoryStream(_pendingSave));
+                    var ms = new MemoryStream(_pendingSave);
+                    var map = WorldSave.Read(_war, ms);
                     loaded = true;
-                    log($"war loaded: {_war.Bands.Count} bands, {map.MissingPlaces} saved places and {map.MissingFactions} factions no longer in the world");
+                    int waiting = ReadLink(ms);
+                    log($"war loaded: {_war.Bands.Count} bands, {map.MissingPlaces} saved places and {map.MissingFactions} factions no longer in the world, {waiting} overruns waiting for their settling");
                 }
                 catch (InvalidDataException e)
                 {
@@ -101,14 +123,38 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
         }
     }
 
+    /// <summary>The TWR link's waiting overruns, after the war in the save; a damaged section keeps none (the war itself is already read).</summary>
+    int ReadLink(MemoryStream ms)
+    {
+        try
+        {
+            return _twr.Read(ms, _war!);
+        }
+        catch (Exception e) when (e is InvalidDataException or EndOfStreamException or IOException)
+        {
+            log($"the save's waiting overruns could not be read ({e.Message}): none kept");
+            return 0;
+        }
+    }
+
     void News()
     {
         if (_war == null) return;
+        List<WorldEvent>? fresh = null;
         foreach (var e in _war.Events)
         {
             if (e.Seq <= _newsSeq) continue;
             _newsSeq = e.Seq;
             if (settings.NewsInLog && e.Importance >= 2) log(_war.Say(e));
+            (fresh ??= []).Add(e);
+        }
+
+        if (fresh == null || !settings.WastelandNews) return;
+        _twr.Forward(_war, fresh);
+        if (_twr.Bound && !_twrSaid)
+        {
+            _twrSaid = true;
+            log("war news goes to The Wasteland Remembers' news board");
         }
     }
 
@@ -126,6 +172,7 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
     {
         if (_war == null) return;
         WorldSave.Write(_war, stream);
+        _twr.Write(stream, _war);
     }
 
     /// <summary>
@@ -158,6 +205,9 @@ public sealed class DustlifeSettings
 
     [Setting("Hub theatre", Hint = "The Shek and the Holy Nation raid each other's mines, farms and ruins round the Hub (a test: off by default).")]
     public bool HubTheatre { get; set; }
+
+    [Setting("War news for The Wasteland Remembers", Hint = "With The Wasteland Remembers installed, towns near a fight talk about it: places taken, sieges given up, marches and raids.")]
+    public bool WastelandNews { get; set; } = true;
 
     [Setting("War news in the log", Hint = "Writes the war's bigger events to the game's log.")]
     public bool NewsInLog { get; set; } = true;

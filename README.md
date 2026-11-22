@@ -1,6 +1,6 @@
 # Dustlife for Meitou
 
-> **Version 0.3.0** (the war runs in the game, off screen, from the game's own towns and roads; marching bands near the player become the game's own squads; not released, not yet tried in game) · Meitou mod id `pza.dustlife` · engine pin `1cc76a0`
+> **Version 0.4.5** (the war runs in the game, off screen, from the game's own towns and roads; marching bands near the player become the game's own squads; its news reaches The Wasteland Remembers' news board; loads in the released game since 0.4.3 (earlier builds were refused); not released, not yet tried in game) · Meitou mod id `pza.dustlife` · engine pin `1cc76a0`
 
 Dustlife, A-Life for Kenshi, as a [MeitouClient](https://github.com/Meitou-Modding-Ecosystem/MeitouClient) code mod: the whole map stays at
 war while the player is elsewhere. Factions hold towns, raise garrisons from what their towns produce, send their surplus to take more, and

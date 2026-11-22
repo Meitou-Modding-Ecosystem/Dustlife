@@ -54,6 +54,15 @@ public sealed class Squads(SquadConfig cfg)
     /// <summary>Bands handed over, bands lost with their squad, squads found again after a load (a rule that never fires is a failed test).</summary>
     public long HandedOver, LostWithSquad, Relinked;
 
+    /// <summary>
+    /// Why no band was handed over (each sync counts one reason): nobody of the player's, the cap reached, no marching invader or patrol,
+    /// none with a squad template, none in the ring (too far or too near), the game refused the spawn.
+    /// </summary>
+    public long Syncs, NoPlayers, AtCap, NoMarching, NoTemplate, OutOfRing, SpawnRefused;
+
+    /// <summary>The nearest marching band with a template to the player's people at the last sync (world units; NaN when none).</summary>
+    public float Nearest = float.NaN;
+
     public IReadOnlyDictionary<int, int> SquadOf => _squadOf;
 
     public static string TagOf(Band b) => TagPrefix + b.Id.ToString(CultureInfo.InvariantCulture);
@@ -67,6 +76,7 @@ public sealed class Squads(SquadConfig cfg)
     /// </summary>
     public void Sync(World w, ISquadHost host, IReadOnlyList<Vector2> players)
     {
+        Syncs++;
         if (!_relinked) Relink(w, host);
         Follow(w, host);
         HandOver(w, host, players);
@@ -111,26 +121,63 @@ public sealed class Squads(SquadConfig cfg)
 
     void HandOver(World w, ISquadHost host, IReadOnlyList<Vector2> players)
     {
-        if (players.Count == 0 || _squadOf.Count >= Cfg.MaxSquads) return;
+        if (players.Count == 0)
+        {
+            NoPlayers++;
+            return;
+        }
+
+        if (_squadOf.Count >= Cfg.MaxSquads)
+        {
+            AtCap++;
+            return;
+        }
+
         Band? pick = null;
-        float best = float.MaxValue;
+        float best = float.MaxValue, nearest = float.NaN;
+        bool marching = false, templated = false;
         foreach (var b in w.Bands)
         {
             if (!b.Alive || b.External || b.Owner != "warfare" || b.State != BandState.Moving || b.Role is not (BandRole.Invader or BandRole.Patrol)) continue;
+            marching = true;
             if (!Cfg.Templates.ContainsKey(w.Factions[b.Faction].Key)) continue;
+            templated = true;
             float d = players.Min(p => Vector2.Distance(p, b.Pos));
+            if (!(d >= nearest)) nearest = d;
             if (d > Cfg.HandOverRadius || d < Cfg.MinRadius || d >= best) continue;
             (best, pick) = (d, b);
         }
 
-        if (pick == null) return;
+        Nearest = nearest;
+        if (pick == null)
+        {
+            if (!marching) NoMarching++;
+            else if (!templated) NoTemplate++;
+            else OutOfRing++;
+            return;
+        }
+
         var (invader, patrol) = Cfg.Templates[w.Factions[pick.Faction].Key];
         string template = pick.Role == BandRole.Invader ? invader : patrol;
         int squad = host.Spawn(pick.Faction, template, pick.Home, pick.Pos, pick.TargetPos, TagOf(pick));
-        if (squad < 0) return;
+        if (squad < 0)
+        {
+            SpawnRefused++;
+            return;
+        }
+
         pick.External = true;
         _squadOf[pick.Id] = squad;
         _goalOf[pick.Id] = pick.TargetPos;
         HandedOver++;
+    }
+
+    /// <summary>One line for the log: what the hand-over did and why it didn't.</summary>
+    public string Summary(string? refusal)
+    {
+        string near = float.IsNaN(Nearest) ? "none" : Nearest.ToString("0", CultureInfo.InvariantCulture);
+        string last = string.IsNullOrEmpty(refusal) ? "" : " (last: " + refusal + ")";
+        return FormattableString.Invariant(
+            $"real squads: {HandedOver} handed over, {_squadOf.Count} in the game now, {LostWithSquad} lost with their squad, {Relinked} found again; of {Syncs} syncs: {NoPlayers} with none of the player's people, {AtCap} at the cap of {Cfg.MaxSquads}, {NoMarching} with no band marching, {NoTemplate} with no squad template, {OutOfRing} with none {Cfg.MinRadius:0} to {Cfg.HandOverRadius:0} away (nearest {near}), {SpawnRefused} spawns refused{last}");
     }
 }
