@@ -62,8 +62,24 @@ strike early. The daily log line counts the strikes, TWR's "not now" answers, an
 
 Rivalry Core (`rivalry.core`) is an optional dependency (`>=0.6.0 <0.7.0`), read by reflection through `ModContext.Dependency<object>`, so
 Dustlife builds and runs without it. With it loaded, a war band of a faction hostile to the player becomes the game's squad near the player
-only once Rivalry Core lets it: it is a `HostileCandidate` (source `pza.dustlife.war`, key `band:<id>`, grudge 0, travel 0) in Rivalry
-Core's queue of who goes next (0.6.2+; `ClaimParty` on 0.6.0 and 0.6.1), so it waits for the one hostile party slot and the rest between
-hunts like TWR's crews and Rivalry Core's own hunters. Its claim is renewed at every sync while the squad is within 7 km of the player's
-people and released when it marches away or is gone. A band of a faction not hostile to the player passes by and asks nothing. Setting:
-"Rivalry Core's limits" (on). Once a game day the log says what was proposed, what went, what waited and what is held.
+only once Rivalry Core lets it: it is a `HostileCandidate` (source `pza.dustlife.war`, key `band:<id>`, grudge Rivalry Core's
+`HuntThreshold`, 60 by default, so it ranks like the weakest grudge hunt; travel 0, as it is already within 7 km) in Rivalry Core's queue of
+who goes next (0.6.2+; `ClaimParty` on 0.6.0 and 0.6.1), so it waits for the one hostile party slot and the rest between hunts like TWR's
+crews and Rivalry Core's own hunters. A band of a faction not hostile to the player passes by and asks nothing, also while a nearer hostile
+band waits its turn. Setting: "Rivalry Core's limits" (on). Once a game day the log says what was proposed, what went, what waited, what is
+held, renewed, claimed again, released and dropped.
+
+- A queue win reaches Dustlife only when it proposes the same band again. A band proposed in the last 6 game hours but not at this sync (a
+  nearer band took the pick, it left the ring, the cap was reached) is released, and a spawn the game refuses releases its win at once.
+  Since Rivalry Core 0.6.6 such an unconfirmed win starts no rest.
+- While its squad is within 7 km of the player's people the claim is renewed at every sync; it is released when the squad marches farther
+  or is gone. A hostile squad within 7 km that holds no claim claims again: after a load (Dustlife's list of claims is not saved, Rivalry
+  Core's claim is), or when it comes back. During Rivalry Core's rest a new claim is refused and asked again at the next sync.
+- Where it runs: Rivalry Core 0.6.4+ needs Meitou `>=0.22.0 <0.22.2`, and 0.6.3 and older don't load in released Meitou, so the link runs on
+  Meitou 0.22.0 and 0.22.1 with Rivalry Core 0.6.4 or newer; elsewhere Dustlife runs on its own cap.
+- The range: an optional dependency loaded outside its range gets the dependent refused, not left out. Rivalry Core bumps its minor
+  version only when a member Dustlife calls changes; widen the range in the same release as that bump, after checking the members
+  `RivalryContractTests` checks.
+- Tests: `RivalryLinkTests` run against a stand-in with the 0.6.6 contract; `RivalryContractTests` check every member `RivalryLink` looks up
+  against the Rivalry Core in `meitou.lock.json` (now `rivalry-core-0.6.5-beta.39661ed`; move the lock, and the engine to its `engine`
+  commit, when a newer release is out).

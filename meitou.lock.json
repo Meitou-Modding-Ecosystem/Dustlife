@@ -1,4 +1,14 @@
 {
   "format": 1,
-  "frameworks": []
+  "frameworks": [
+    {
+      "id": "rivalry.core",
+      "repo": "Meitou-Modding-Ecosystem/RivalryCore",
+      "tag": "rivalry-core-0.6.5-beta.39661ed",
+      "asset": "RivalryCore-0.6.5-beta.39661ed.zip",
+      "sha256": "ba68c27bf4d46532058b155ce9d8dc44d51bd46365b14c6e6c053f8456436434",
+      "folder": "RivalryCore",
+      "engine": "9ee4074bbc6fd7fdeb26108a04afc9f90cb1dc01"
+    }
+  ]
 }

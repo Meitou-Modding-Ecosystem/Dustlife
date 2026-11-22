@@ -24,4 +24,16 @@
     <ProjectReference Include="../Dustlife/Dustlife.csproj" />
   </ItemGroup>
 
+  <!--
+    The locked Rivalry Core (meitou.lock.json) under the alias "rivalry": RivalryLinkTests keeps a stand-in with the same full type names, the
+    way RivalryLink finds the real one by reflection, and RivalryContractTests checks those names against the real assembly.
+  -->
+  <Target Name="AliasRivalryCore" AfterTargets="MeitouReferenceFrameworks">
+    <ItemGroup>
+      <Reference Condition="'%(Reference.Filename)' == 'RivalryCore'">
+        <Aliases>rivalry</Aliases>
+      </Reference>
+    </ItemGroup>
+  </Target>
+
 </Project>

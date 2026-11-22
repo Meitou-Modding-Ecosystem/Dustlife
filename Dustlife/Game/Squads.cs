@@ -85,7 +85,7 @@ public sealed class Squads(SquadConfig cfg)
     /// <summary>The shared limits a hand-over asks first (Rivalry Core's, <see cref="RivalryLink"/>); null: Dustlife's own cap only.</summary>
     public IHandOverGate? Gate { get; set; }
 
-    /// <summary>Syncs whose pick the gate held back (it waits its turn).</summary>
+    /// <summary>Bands in the ring the gate held back (each waits its turn while a farther one may go).</summary>
     public long HeldByGate;
 
     /// <summary>Bands handed over, bands lost with their squad, squads found again after a load (a rule that never fires is a failed test).</summary>
@@ -131,6 +131,7 @@ public sealed class Squads(SquadConfig cfg)
         if (!_relinked) Relink(w, host);
         Follow(w, host);
         HandOver(w, host, players);
+        Gate?.EndSync(w);
     }
 
     void Relink(World w, ISquadHost host)
@@ -244,8 +245,8 @@ public sealed class Squads(SquadConfig cfg)
             return;
         }
 
-        Band? pick = null;
-        float best = float.MaxValue, nearest = float.NaN;
+        var ring = new List<(float D, Band B)>();
+        float nearest = float.NaN;
         bool marching = false, templated = false;
         foreach (var b in w.Bands)
         {
@@ -256,12 +257,12 @@ public sealed class Squads(SquadConfig cfg)
             templated = true;
             float d = players.Min(p => Vector2.Distance(p, b.Pos));
             if (!(d >= nearest)) nearest = d;
-            if (d > Cfg.HandOverRadius || d < Cfg.MinRadius || d >= best) continue;
-            (best, pick) = (d, b);
+            if (d > Cfg.HandOverRadius || d < Cfg.MinRadius) continue;
+            ring.Add((d, b));
         }
 
         Nearest = nearest;
-        if (pick == null)
+        if (ring.Count == 0)
         {
             if (!marching) NoMarching++;
             else if (!templated) NoTemplate++;
@@ -269,11 +270,7 @@ public sealed class Squads(SquadConfig cfg)
             return;
         }
 
-        if (Gate != null && !Gate.MayHandOver(w, pick))
-        {
-            HeldByGate++;
-            return;
-        }
+        if (Pick(w, ring) is not { } pick) return;
 
         var (invader, patrol) = Cfg.Templates[w.Factions[pick.Faction].Key];
         string template = pick.Role == BandRole.Invader ? invader : patrol;
@@ -281,6 +278,7 @@ public sealed class Squads(SquadConfig cfg)
         if (squad < 0)
         {
             SpawnRefused++;
+            Gate?.Gone(pick);                                  // a win the gate gave for a squad that never came: give it back now
             return;
         }
 
@@ -288,6 +286,22 @@ public sealed class Squads(SquadConfig cfg)
         _squadOf[pick.Id] = squad;
         _goalOf[pick.Id] = pick.TargetPos;
         HandedOver++;
+    }
+
+    /// <summary>
+    /// The nearest band in the ring that the gate lets go; a band it holds back waits its turn and the next one is asked, so a hostile band
+    /// waiting for Rivalry Core doesn't keep a band that needs nothing from coming. Null when the gate held them all.
+    /// </summary>
+    Band? Pick(World w, List<(float D, Band B)> ring)
+    {
+        foreach (var (_, b) in ring.OrderBy(r => r.D).ThenBy(r => r.B.Id))
+        {
+            if (Gate == null || Gate.MayHandOver(w, b)) return b;
+
+            HeldByGate++;
+        }
+
+        return null;
     }
 
     string GiveBackText() => CanGiveBack
