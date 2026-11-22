@@ -12,6 +12,19 @@ lose what they can't feed or defend. Author: PZA. GPL-3.0-or-later.
   the edges.
 - Build and run locally: [docs/play.md](docs/play.md). Setting up the repos: [docs/local-development.md](docs/local-development.md).
 
+## Releases and tools
+
+- **Releases are automatic.** Merge `beta` -> `main` -> `release` with a bumped `version` in `Dustlife/meitou.json`: the merge into `release`
+  tags it `dustlife-v<version>` and publishes `Dustlife-<version>.zip` (`.github/workflows/release.yml`). An unchanged version publishes
+  nothing. `tools\Tag-Release.ps1` pushes the tag by hand, only if that run failed before tagging.
+- Steam Workshop: the Workshop Watcher on your PC uploads each new release; first-time setup in
+  [docs/steam-workshop.md](docs/steam-workshop.md).
+- Engine updates: after every pull, `powershell -ExecutionPolicy Bypass -File tools\Update-Local.ps1 -Clean -Build` moves the engine submodule
+  and checks the pins; `tools\Build.ps1` builds and deploys without Visual Studio. Moving to a new Meitou release, compat issues and
+  releases: skill `.claude/skills/meitou-engine-release`.
+- Daily checks: `meitou-compat.yml` tests the mod against the newest Meitou release and nightly; `framework-update.yml` keeps
+  `meitou.lock.json` current once Dustlife depends on a framework.
+
 ## Port order
 
 One step at a time, each with its tests:
