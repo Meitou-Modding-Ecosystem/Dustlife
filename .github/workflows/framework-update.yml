@@ -21,3 +21,4 @@ jobs:
     with:
       channel: beta
       base: main
+      merge: false
