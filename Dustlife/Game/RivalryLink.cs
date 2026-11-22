@@ -16,8 +16,11 @@ public interface IHandOverGate
     /// <summary>A handed-over band's squad is still in the game; <paramref name="near"/>: within reach of the player's people.</summary>
     void InGame(World w, Band band, bool near);
 
-    /// <summary>A handed-over band is gone (beaten, or its squad removed).</summary>
+    /// <summary>A handed-over band is gone (beaten, or its squad removed), or its spawn was refused after the gate let it go.</summary>
     void Gone(Band band);
+
+    /// <summary>The sync's hand-over is done: let go of what was asked for earlier but not now.</summary>
+    void EndSync(World w) { }
 }
 
 /// <summary>
@@ -28,6 +31,12 @@ public interface IHandOverGate
 /// player passes by and needs nothing. Rivalry Core is an optional dependency read by reflection (its entry through
 /// <c>ModContext.Dependency&lt;object&gt;</c>), so Dustlife builds and runs without it; Rivalry Core 0.6.0 and 0.6.1 have no queue, and
 /// their <c>ClaimParty</c> is used instead. Nothing throws: a call that fails counts and lets the band wait.
+/// <para>
+/// A queue win reaches Dustlife only when it proposes the same band again, so a band proposed earlier but not now (a nearer band took the
+/// pick, it left the ring, the cap was reached) is released for <see cref="StaleHours"/>, and a refused spawn releases its win at once
+/// (since 0.6.6 such an unconfirmed win starts no rest). A hostile squad near the player that holds no claim (after a load, or back after
+/// marching away) claims again.
+/// </para>
 /// </summary>
 public sealed class RivalryLink(object? api, Func<int, int> gameFaction, Func<int, bool> hostileToPlayer) : IHandOverGate
 {
@@ -35,14 +44,31 @@ public sealed class RivalryLink(object? api, Func<int, int> gameFaction, Func<in
     /// <summary>A claim lapses this many game hours after it was made or renewed (renewed at every sync while near).</summary>
     public const double ClaimHours = 6;
 
+    /// <summary>
+    /// A band proposed but not proposed again is released for this many game hours: longer than Rivalry Core keeps another mod's candidate
+    /// in its queue (2 × its assessment interval, 4 h by default).
+    /// </summary>
+    public const double StaleHours = 6;
+
+    /// <summary>The grudge a band is proposed with when Rivalry Core's <c>HuntThreshold</c> can't be read (its default).</summary>
+    public const float DefaultGrudge = 60;
+
     object? _state;
     MethodInfo? _in, _propose, _claim, _release, _partiesOut;
     PropertyInfo? _restUntil;
     Type? _candidate, _claimType, _kind;
     readonly HashSet<int> _claimed = [];
+    readonly HashSet<int> _proposedNow = [];
+    readonly Dictionary<int, double> _proposedAt = [];
 
     /// <summary>Counters for the daily log line.</summary>
-    public long Proposed, Won, Waited, Renewed, Released, Failed;
+    public long Proposed, Won, Waited, Renewed, Released, Reclaimed, Dropped, Failed;
+
+    /// <summary>
+    /// The grudge a band is proposed with: Rivalry Core's <c>HuntThreshold</c>, the least grudge a hunt needs, so a war band near the player
+    /// ranks like the weakest grudge hunt and the hours it has waited break ties. Its travel is 0: it is already within reach.
+    /// </summary>
+    public float Grudge { get; private set; } = DefaultGrudge;
 
     /// <summary>Whether Rivalry Core is loaded and its API found.</summary>
     public bool Linked => _in != null;
@@ -65,25 +91,9 @@ public sealed class RivalryLink(object? api, Func<int, int> gameFaction, Func<in
         if (api == null) return false;
         try
         {
-            if (_in == null)
-            {
-                var face = api.GetType().GetInterfaces().FirstOrDefault(i => i.FullName == "Rivalry.IRivalryApi");
-                _in = face?.GetMethod("In");
-                if (_in == null) return false;
-                var asm = face!.Assembly;
-                _candidate = asm.GetType("Rivalry.HostileCandidate");
-                _claimType = asm.GetType("Rivalry.PartyClaim");
-                _kind = asm.GetType("Rivalry.PartyKind");
-                var stateFace = asm.GetType("Rivalry.IRivalryState");
-                if (stateFace == null || _claimType == null || _kind == null) { _in = null; return false; }
-                _propose = _candidate == null ? null : stateFace.GetMethod("Propose", [_candidate]);
-                _claim = stateFace.GetMethod("ClaimParty", [_claimType]);
-                _release = stateFace.GetMethod("ReleaseParty", [typeof(string), typeof(string)]);
-                _partiesOut = stateFace.GetMethod("PartiesOut", [_kind]);
-                _restUntil = stateFace.GetProperty("HostileRestUntil");
-            }
+            if (_in == null && Find().Count > 0) return false;
 
-            _state = _in.Invoke(api, [world]);
+            _state = _in!.Invoke(api, [world]);
             if (_state == null) return false;
             HostileOut = _partiesOut?.Invoke(_state, [Hostile()]) is int n ? n : -1;
             RestUntil = _restUntil?.GetValue(_state) is double r ? r : double.NaN;
@@ -97,9 +107,66 @@ public sealed class RivalryLink(object? api, Func<int, int> gameFaction, Func<in
         }
     }
 
+    /// <summary>
+    /// Looks up Rivalry Core's members by name: the members it lacks (empty when linked). <c>Propose</c> and <c>HostileRestUntil</c> are
+    /// optional (0.6.2 and 0.6.1); the rest is needed.
+    /// </summary>
+    public IReadOnlyList<string> Find()
+    {
+        var missing = new List<string>();
+        var face = api?.GetType().GetInterfaces().FirstOrDefault(i => i.FullName == "Rivalry.IRivalryApi");
+        var asm = face?.Assembly;
+        var stateFace = asm?.GetType("Rivalry.IRivalryState");
+        _candidate = asm?.GetType("Rivalry.HostileCandidate");
+        _claimType = asm?.GetType("Rivalry.PartyClaim");
+        _kind = asm?.GetType("Rivalry.PartyKind");
+        if (face == null || stateFace == null || _claimType == null || _kind == null)
+        {
+            missing.Add("Rivalry.IRivalryApi, IRivalryState, PartyClaim or PartyKind");
+            return missing;
+        }
+
+        Need(missing, "IRivalryApi.In", face.GetMethod("In"));
+        Need(missing, "IRivalryState.ClaimParty", _claim = stateFace.GetMethod("ClaimParty", [_claimType]));
+        Need(missing, "IRivalryState.ReleaseParty", _release = stateFace.GetMethod("ReleaseParty", [typeof(string), typeof(string)]));
+        Need(missing, "IRivalryState.PartiesOut", _partiesOut = stateFace.GetMethod("PartiesOut", [_kind]));
+        Need(missing, "PartyClaim(string, PartyKind, string, double, int)",
+            _claimType.GetConstructor([typeof(string), _kind, typeof(string), typeof(double), typeof(int)]));
+        _propose = _candidate == null ? null : stateFace.GetMethod("Propose", [_candidate]);
+        if (_propose != null) Need(missing, "HostileCandidate(string, string, int, float, double, double)", CandidateConstructor());
+        _restUntil = stateFace.GetProperty("HostileRestUntil");
+        Grudge = ReadGrudge(face);
+        if (missing.Count == 0) _in = face.GetMethod("In");
+        return missing;
+    }
+
+    static void Need(List<string> missing, string name, object? found)
+    {
+        if (found == null) missing.Add(name);
+    }
+
+    ConstructorInfo? CandidateConstructor() =>
+        _candidate!.GetConstructor([typeof(string), typeof(string), typeof(int), typeof(float), typeof(double), typeof(double)]);
+
+    /// <summary>Rivalry Core's <c>Options.HuntThreshold</c>; <see cref="DefaultGrudge"/> when it can't be read.</summary>
+    float ReadGrudge(Type face)
+    {
+        try
+        {
+            object? options = face.GetProperty("Options")?.GetValue(api);
+            return options?.GetType().GetProperty("HuntThreshold")?.GetValue(options) is float f && float.IsFinite(f) ? f : DefaultGrudge;
+        }
+        catch (Exception)
+        {
+            return DefaultGrudge;
+        }
+    }
+
     object Hostile() => Enum.Parse(_kind!, "Hostile");
 
-    static string Key(Band b) => "band:" + b.Id.ToString(CultureInfo.InvariantCulture);
+    static string Key(Band b) => Key(b.Id);
+
+    static string Key(int band) => "band:" + band.ToString(CultureInfo.InvariantCulture);
 
     bool Concerns(Band b) => hostileToPlayer(b.Faction);
 
@@ -110,8 +177,10 @@ public sealed class RivalryLink(object? api, Func<int, int> gameFaction, Func<in
         try
         {
             Proposed++;
+            _proposedNow.Add(band.Id);
+            _proposedAt[band.Id] = w.Now;
             bool go = _propose != null
-                ? (bool)_propose.Invoke(_state, [Activator.CreateInstance(_candidate!, Source, Key(band), gameFaction(band.Faction), 0f, 0.0, ClaimHours)!])!
+                ? (bool)_propose.Invoke(_state, [Candidate(band)])!
                 : (bool)_claim!.Invoke(_state, [Claim(band)])!;
             if (go)
             {
@@ -128,19 +197,18 @@ public sealed class RivalryLink(object? api, Func<int, int> gameFaction, Func<in
         }
     }
 
+    object Candidate(Band band) =>
+        CandidateConstructor()!.Invoke([Source, Key(band), gameFaction(band.Faction), Grudge, 0.0, ClaimHours]);
+
     object Claim(Band band) => Activator.CreateInstance(_claimType!, Source, Hostile(), Key(band), ClaimHours, gameFaction(band.Faction))!;
 
     public void InGame(World w, Band band, bool near)
     {
-        if (_state == null || !_claimed.Contains(band.Id)) return;
+        if (_state == null || !Concerns(band)) return;
         try
         {
-            if (near)
-            {
-                _claim!.Invoke(_state, [Claim(band)]);
-                Renewed++;
-            }
-            else Release(band);                                // marched away from the player: no longer a party in their area
+            if (near) Hold(band);
+            else if (_claimed.Contains(band.Id)) Release(band);    // marched away from the player: no longer a party in their area
         }
         catch (Exception)
         {
@@ -148,24 +216,76 @@ public sealed class RivalryLink(object? api, Func<int, int> gameFaction, Func<in
         }
     }
 
+    /// <summary>
+    /// Renews a near squad's claim, or claims again for one that holds none (after a load, Dustlife's list is empty while Rivalry Core's saved
+    /// claim still runs; or it marched away and came back). A refused claim (the cap, the rest) is asked again at the next sync.
+    /// </summary>
+    void Hold(Band band)
+    {
+        bool known = _claimed.Contains(band.Id);
+        if (!(bool)_claim!.Invoke(_state, [Claim(band)])!) return;
+
+        if (known) Renewed++;
+        else
+        {
+            _claimed.Add(band.Id);
+            Reclaimed++;
+        }
+    }
+
     public void Gone(Band band)
     {
-        if (_state == null || !_claimed.Contains(band.Id)) return;
+        if (_state == null || !Concerns(band)) return;
         try
         {
-            Release(band);
+            Release(band);                                     // also a claim saved by Rivalry Core that Dustlife's list lost in a load
         }
         catch (Exception)
         {
             Failed++;
+        }
+    }
+
+    public void EndSync(World w)
+    {
+        if (_state == null) return;
+        try
+        {
+            DropStale(w.Now);
+        }
+        catch (Exception)
+        {
+            Failed++;
+        }
+        finally
+        {
+            _proposedNow.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Releases the bands proposed in the last <see cref="StaleHours"/> but not in this sync and not handed over: a queue win Dustlife won't
+    /// pick up would otherwise hold the hostile slot.
+    /// </summary>
+    void DropStale(double now)
+    {
+        foreach (var (id, at) in _proposedAt.ToList())
+        {
+            if (_proposedNow.Contains(id) || _claimed.Contains(id)) continue;
+            if (now - at > StaleHours)
+            {
+                _proposedAt.Remove(id);
+                continue;
+            }
+
+            if ((bool)_release!.Invoke(_state, [Source, Key(id)])!) Dropped++;
         }
     }
 
     void Release(Band band)
     {
         _claimed.Remove(band.Id);
-        _release!.Invoke(_state, [Source, Key(band)]);
-        Released++;
+        if ((bool)_release!.Invoke(_state, [Source, Key(band)])!) Released++;
     }
 
     /// <summary>One line for the log.</summary>
@@ -174,7 +294,10 @@ public sealed class RivalryLink(object? api, Func<int, int> gameFaction, Func<in
         if (api == null) return "Rivalry Core: not loaded (Dustlife's own squad cap only)";
         if (!Linked) return "Rivalry Core: loaded, but its API was not found";
         string rest = double.IsNaN(RestUntil) || RestUntil <= nowHours ? "not resting" : FormattableString.Invariant($"resting {RestUntil - nowHours:0.#} h more");
-        return FormattableString.Invariant(
-            $"Rivalry Core: linked ({(HasQueue ? "queue" : "claims only")}), {HostileOut} hostile parties out, {rest}; Dustlife proposed {Proposed}, {Won} went, {Waited} waited, {Holding} holding a claim, {Renewed} renewals, {Released} released, {Failed} failed");
+        string state = FormattableString.Invariant($"linked ({(HasQueue ? "queue" : "claims only")}), {HostileOut} hostile parties out, {rest}");
+        string asked = FormattableString.Invariant($"Dustlife proposed {Proposed}, {Won} went, {Waited} waited, {Holding} holding a claim");
+        string kept = FormattableString.Invariant(
+            $"{Renewed} renewals, {Reclaimed} claimed again, {Released} released, {Dropped} dropped wins, {Failed} failed");
+        return $"Rivalry Core: {state}; {asked}, {kept}";
     }
 }
