@@ -21,6 +21,9 @@ public sealed class DustlifeMod : IMod
     /// </summary>
     public const string SystemName = "world";
 
+    /// <summary>Rivalry Core's id, an optional dependency.</summary>
+    public const string RivalryId = "rivalry.core";
+
     public void Initialize(ModContext context)
     {
         string version = typeof(DustlifeMod).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "?";
@@ -29,6 +32,9 @@ public sealed class DustlifeMod : IMod
         context.Log($"v{version} - Dustlife (A-Life for Kenshi) for Meitou, by PZA: the war runs off screen, and its marching bands near you become the game's squads");
         var settings = new DustlifeSettings();
         context.AddSettings(settings);
-        context.AddSystem(SystemName, b => new DustlifeSystem(b.Data, b.Find<PopulationSystem>(), settings, context.Log), SystemAnchor.End);
+        // Rivalry Core is optional and read by reflection (RivalryLink): its entry as a plain object, no Rivalry types named here
+        object? rivalry = context.HasDependency(RivalryId) ? context.Dependency<object>(RivalryId) : null;
+        context.Log(rivalry == null ? "Rivalry Core not loaded: Dustlife's own squad cap only" : "Rivalry Core found: war bands hostile to the player join its limits");
+        context.AddSystem(SystemName, b => new DustlifeSystem(b.Data, b.Find<PopulationSystem>(), settings, context.Log, rivalry), SystemAnchor.End);
     }
 }

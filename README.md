@@ -1,6 +1,6 @@
 # Dustlife for Meitou
 
-> **Version 0.4.5** (the war runs in the game, off screen, from the game's own towns and roads; marching bands near the player become the game's own squads; its news reaches The Wasteland Remembers' news board; loads in the released game since 0.4.3 (earlier builds were refused); not released, not yet tried in game) · Meitou mod id `pza.dustlife` · engine pin `1cc76a0`
+> **Version 0.6.0** (the war runs in the game, off screen, from the game's own towns and roads; marching bands near the player become the game's own squads, fight what they meet once loaded (on Meitou 0.22.1 too) and go back to Dustlife where Meitou can despawn them (VlcekM/MeitouClient#1173); its news reaches The Wasteland Remembers' news board, and as a test setting (off) its war bands scatter TWR's outlaw camps within TWR's limits; under Rivalry Core's limits when it is loaded; not released, not yet tried in game) · Meitou mod id `pza.dustlife` · engine pin `1cc76a0`
 
 Dustlife, A-Life for Kenshi, as a [MeitouClient](https://github.com/Meitou-Modding-Ecosystem/MeitouClient) code mod: the whole map stays at
 war while the player is elsewhere. Factions hold towns, raise garrisons from what their towns produce, send their surplus to take more, and
@@ -79,8 +79,11 @@ One step at a time, each with its tests:
      external: the core neither moves it nor fights it off screen; its position and losses come from the squad; when the squad is close to
      its goal the band arrives as any band does; a beaten squad ends the band. At most four at once, one more per sync. After a load the
      squads are found again by their tags (the engine gives platoons new ids), and an external band whose squad the save no longer has
-     was beaten: it is never re-placed, so a killed crew does not come back. The engine has no despawn, so a squad stays the game's for
-     good; that is why only marching bands near the player are handed over. Setting "Real squads near you". 4 tests with a fake game;
+     was beaten: it is never re-placed, so a killed crew does not come back. Released Meitou has no despawn, so there a squad stays the
+     game's for good, which is why only marching bands near the player are handed over. On a Meitou with `DespawnPlatoon`
+     (VlcekM/MeitouClient#1173, found by reflection) a squad goes back to Dustlife once it has stayed 9 km from the player's people for
+     four syncs, or reached its goal as a stand-in nobody can see; its band walks on in the simulation and isn't handed over again for a
+     game day (6 more tests, four planted bugs each caught). Setting "Real squads near you". 4 tests with a fake game;
      four planted bugs each fail one.
    - Not yet: beaten garrisons rehomed as guests (`RehomePlatoon`, newer engines only), raid parties, the Hub theatre, rebuilt ruins
      through world states, and an API for other mods (TheWastelandRemembers' planned incoming events; its rival picker can skip squads

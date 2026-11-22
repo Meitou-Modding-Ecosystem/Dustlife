@@ -1,0 +1,94 @@
+# Dustlife for Meitou: known bugs the fuzz harness must catch (PZAMeitouUi\fuzz\mutate.py). Author: PZA. One block per mutant, verbatim.
+# Header: ID | file from the folder that holds the repos | fuzz targets to run | what it plants
+
+@@ DL-cap | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | one squad more than the cap handed over
+<<<
+        if (_squadOf.Count >= Cfg.MaxSquads)
+===
+        if (_squadOf.Count > Cfg.MaxSquads)
+>>>
+
+@@ DL-cooldown | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | a band given back is handed over again at once
+<<<
+            if (_cooldownUntil.TryGetValue(b.Id, out long until) && Syncs <= until) continue;
+===
+            if (_cooldownUntil.TryGetValue(b.Id, out long until) && Syncs < 0) continue;
+>>>
+
+@@ DL-back-external | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | a band given back stays external (no squad, never simulated again)
+<<<
+        b.External = false;                                    // the band walks on in the simulation from where its squad was
+===
+        // the band walks on in the simulation from where its squad was
+>>>
+
+@@ DL-loose-forever | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | API 2: a squad let loose while loaded is never held again
+<<<
+            host.SetHeld(squad, true);
+            host.Send(squad, b.TargetPos);
+===
+            host.Send(squad, b.TargetPos);
+>>>
+
+@@ DL-api3-release | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | API 3: the hold is released anyway (the squad would roam its town's trips off screen)
+<<<
+            if (host.HoldStopsLoaded) LetLoadedAct(host, b, squad);
+===
+            LetLoadedAct(host, b, squad);
+>>>
+
+@@ DL-save-eof | DustlifeMeitou\Dustlife\Core\Save.cs | save.read | a cut-off save throws EndOfStreamException (an IOException), which the system doesn't catch
+<<<
+        catch (Exception e) when (e is EndOfStreamException or IOException or ArgumentException or OverflowException or FormatException)
+===
+        catch (Exception e) when (e is ArgumentException or OverflowException or FormatException)
+>>>
+
+@@ DL-twr-no-holder | DustlifeMeitou\Dustlife\Game\WastelandLink.cs | twr.read | an overrun with no old holder is dropped (it would never become a fall)
+<<<
+            _overrun[p.Id] = (hours, holder);
+===
+            if (holder >= 0) _overrun[p.Id] = (hours, holder);
+>>>
+
+@@ DL-outlaw-unknown | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | an outlaw the squad hasn't heard of is struck
+<<<
+        if (!Get(row, "Known", false))
+===
+        if (false)
+>>>
+
+@@ DL-outlaw-grace | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | a new outlaw or boss struck in its first week
+<<<
+        if (double.IsFinite(after) ? now < after : now - since < GraceHours)
+===
+        if (double.IsFinite(after) ? now < after : now - since < 1)
+>>>
+
+@@ DL-outlaw-month | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | the same outlaw struck again inside 30 days
+<<<
+        if ((_lastStrike.TryGetValue(name, out double last) && now - last < CooldownHours) ||
+===
+        if ((_lastStrike.TryGetValue(name, out double last) && now - last < 24) ||
+>>>
+
+@@ DL-outlaw-wounded | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | a wounded outlaw struck again
+<<<
+        if (status is not ("alive" or "succeeded") || Get(row, "Mood", "") == "wounded")
+===
+        if (status is not ("alive" or "succeeded"))
+>>>
+
+@@ DL-outlaw-newboss | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | a successor inherits the first boss's clock (struck in its own first week)
+<<<
+        double since = _firstSeen.GetValueOrDefault(name + "|" + Boss(name, row), now);
+===
+        double since = _firstSeen.Where(e => e.Key.StartsWith(name + "|", StringComparison.Ordinal)).Select(e => e.Value).DefaultIfEmpty(now).Min();
+>>>
+
+@@ DL-save-text | DustlifeMeitou\Dustlife\Game\WastelandLink.cs | outlaw.read,twr.read | a damaged string length throws FormatException, which the load doesn't catch (Dustlife off for the world)
+<<<
+        catch (FormatException e)
+===
+        catch (FormatException e) when (e.Data.Count < 0)
+>>>

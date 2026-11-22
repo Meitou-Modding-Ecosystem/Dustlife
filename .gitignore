@@ -537,3 +537,9 @@ macos-runtime/
 
 # Frameworks downloaded from meitou.lock.json
 deps/
+
+# test output (the fuzz harness writes tests/out/fuzz)
+tests/out/
+
+# the Meitou release the fuzz harness builds against (PZA's Meitou UI fuzz kit reads it; machine-local)
+mod/local.props

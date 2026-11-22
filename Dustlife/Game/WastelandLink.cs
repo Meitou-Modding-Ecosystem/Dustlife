@@ -117,7 +117,7 @@ public sealed class WastelandLink(Func<Type?>? find = null)
         int count = br.ReadInt32();
         if (count < 0 || count > MaxSaved) throw new InvalidDataException($"{count} saved overruns");
         var rows = new List<(string Place, string Holder, double Hours)>();
-        for (int i = 0; i < count; i++) rows.Add((br.ReadString(), br.ReadString(), br.ReadDouble()));
+        for (int i = 0; i < count; i++) rows.Add((Text(br), Text(br), br.ReadDouble()));
         foreach (var (placeKey, holderKey, hours) in rows)
         {
             if (!double.IsFinite(hours) || w.Places.Find(p => p.Key == placeKey) is not { } p) continue;
@@ -127,6 +127,19 @@ public sealed class WastelandLink(Func<Type?>? find = null)
         }
 
         return _overrun.Count;
+    }
+
+    /// <summary>A saved string; a damaged length (BinaryReader's FormatException) is a damaged save, as the system catches it.</summary>
+    internal static string Text(BinaryReader br)
+    {
+        try
+        {
+            return br.ReadString();
+        }
+        catch (FormatException e)
+        {
+            throw new InvalidDataException("damaged text in the save: " + e.Message, e);
+        }
     }
 
     /// <summary>The overruns waiting for their settling (for the tests and the log).</summary>

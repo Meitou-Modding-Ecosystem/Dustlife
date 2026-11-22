@@ -14,7 +14,7 @@ namespace Dustlife;
 /// the war from the game's own towns, factions and roads, runs it on the game's clock off screen, follows the game's town changes, keeps
 /// it in the save, writes the war's news to the log, and hands marching bands near the player to the game as real squads (5c).
 /// </summary>
-public sealed class DustlifeSystem(PopulationData data, PopulationSystem? population, DustlifeSettings settings, Action<string> log)
+public sealed class DustlifeSystem(PopulationData data, PopulationSystem? population, DustlifeSettings settings, Action<string> log, object? rivalry = null)
     : ITickSystem, IModSaveData
 {
     Squads? _squads;
@@ -25,6 +25,8 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
     GameRelations? _rel;
     readonly TownWatch _watch = new();
     readonly WastelandLink _twr = new();
+    readonly OutlawLink _outlaws = new();
+    RivalryLink? _rivalry;
     bool _twrSaid;
     int _summaryDay = -1;
     long _newsSeq;
@@ -47,7 +49,13 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
         _war.PlayerPos.Clear();
         _war.PlayerPos.AddRange(GameSource.PlayerPositions(world, data));
         int steps = _war.Advance(world.GameHours, _rel);
-        if (steps > 0 && _squads != null && _host != null) _squads.Sync(_war, _host, _war.PlayerPos);
+        if (steps > 0 && _squads != null && _host != null)
+        {
+            if (_rivalry != null) _squads.Gate = _rivalry.Bind(world) ? _rivalry : null;
+            _squads.Sync(_war, _host, _war.PlayerPos);
+        }
+
+        if (steps > 0 && settings.OutlawStrikes && _outlaws.Step(_war, _war.Now) is { } struck) log(struck);
         News();
         Summary(world.GameHours);
     }
@@ -64,8 +72,11 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
             ? (settings.RealSquads ? "real squads: off (the game's population system was not found)" : "real squads: off (setting)")
             : _squads.Summary(_host?.LastRefusal);
         log($"day {day}: {squads}");
+        if (_rivalry != null) log($"day {day}: {_rivalry.Summary(hours)}");
+        else if (settings.RivalryLimits) log($"day {day}: Rivalry Core: {(rivalry == null ? "not loaded" : "linked once real squads start")} (Dustlife's own squad cap only)");
         if (settings.WastelandNews)
             log($"day {day}: The Wasteland Remembers: {(_twr.Bound ? "linked" : "not found")}, {_twr.Sent} sent, {_twr.Refused} refused (repeats), {_twr.Capped} held back, {_twr.Failed} failed");
+        if (settings.OutlawStrikes) log($"day {day}: {_outlaws.Summary()}");
     }
 
     /// <summary>
@@ -111,6 +122,9 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
             {
                 _squads = new Squads(Lore.Squads());
                 _host = new EngineSquads(world, population, _rel.GameIndex, GameSource.SiteOfPlace(data, _war));
+                var rel = _rel;
+                if (settings.RivalryLimits && rivalry != null)
+                    _rivalry = new RivalryLink(rivalry, f => f >= 0 && f < rel.GameIndex.Length ? rel.GameIndex[f] : -1, rel.HostileToPlayer);
             }
             _newsSeq = _war.Events.Count == 0 ? 0 : _war.Events[^1].Seq;
         }
@@ -128,7 +142,9 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
     {
         try
         {
-            return _twr.Read(ms, _war!);
+            int waiting = _twr.Read(ms, _war!);
+            _outlaws.Read(ms);
+            return waiting;
         }
         catch (Exception e) when (e is InvalidDataException or EndOfStreamException or IOException)
         {
@@ -173,6 +189,7 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
         if (_war == null) return;
         WorldSave.Write(_war, stream);
         _twr.Write(stream, _war);
+        _outlaws.Write(stream);
     }
 
     /// <summary>
@@ -208,6 +225,12 @@ public sealed class DustlifeSettings
 
     [Setting("War news for The Wasteland Remembers", Hint = "With The Wasteland Remembers installed, towns near a fight talk about it: places taken, sieges given up, marches and raids.")]
     public bool WastelandNews { get; set; } = true;
+
+    [Setting("Rivalry Core's limits", Hint = "With Rivalry Core installed, a war band hostile to you joins its one-hostile-party limit, rest and queue before it becomes a real squad near you.")]
+    public bool RivalryLimits { get; set; } = true;
+
+    [Setting("War bands strike outlaw camps", Hint = "With The Wasteland Remembers installed, a war band on its own ground scatters an outlaw camp it walks onto: only outlaws you have heard of, never in their first week, at most once a month, and never killing them (a test: off by default).")]
+    public bool OutlawStrikes { get; set; }
 
     [Setting("War news in the log", Hint = "Writes the war's bigger events to the game's log.")]
     public bool NewsInLog { get; set; } = true;
