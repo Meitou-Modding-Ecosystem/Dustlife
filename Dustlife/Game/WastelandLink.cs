@@ -145,6 +145,9 @@ public sealed class WastelandLink(Func<Type?>? find = null)
     /// <summary>The overruns waiting for their settling (for the tests and the log).</summary>
     public int Pending => _overrun.Count;
 
+    /// <summary>Forgets every waiting overrun (a damaged section in the save, <see cref="LinkSave"/>).</summary>
+    public void Clear() => _overrun.Clear();
+
     #endregion
 
     /// <summary>Sends one step's new events (oldest first); returns how many TWR took.</summary>

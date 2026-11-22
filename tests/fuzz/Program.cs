@@ -13,6 +13,9 @@
 //                    change boss and say "not now" at random, with clock jumps: never an unknown, wounded or downed outlaw, never inside the
 //                    first 7 days of its boss (or before TWR's StrikableAfter), never twice in 30 days
 //   outlaw.read      OutlawLink.Read on damaged sections: only InvalidDataException, EndOfStreamException or IOException
+//   link.read        LinkSave.Read (both link sections after the war) on links holding an earlier load, with either section damaged: it never
+//                    throws; what it reports is what the links hold; a damaged overrun section keeps neither, a damaged outlaw section
+//                    keeps the overruns; two good sections keep 2 overruns and 3 times
 using System.Numerics;
 using Dustlife.Core;
 using Dustlife.Game;
@@ -36,6 +39,11 @@ static class Program
                 fz.Expect(fz.Counted(rule) > 0, $"rule '{rule}' never fired in {fz.Case} cases (a rule that never fires is a failed test)");
         }),
         new("outlaw.read", 20000, OutlawRead),
+        new("link.read", 10000, LinkRead, fz =>
+        {
+            foreach (var rule in new[] { "clean", "twr.damaged", "outlaw.damaged" })
+                fz.Expect(fz.Counted(rule) > 0, $"rule '{rule}' never fired in {fz.Case} cases (a rule that never fires is a failed test)");
+        }),
     ]);
 
     // -------------------------------------------------------------------------------------------------------------------- outlaw.strike
@@ -409,6 +417,60 @@ static class Program
 
     static World? s_twrWorld;
     static byte[]? s_twrGood;
+
+    static byte[]? s_outlawGood;
+
+    /// <summary>A good outlaw section: the link's header, then one finite time in each of its three parts.</summary>
+    static byte[] OutlawGood()
+    {
+        if (s_outlawGood != null) return s_outlawGood;
+        using var ms = new MemoryStream();
+        new OutlawLink(() => null).Write(ms);
+        using var o = new MemoryStream();
+        using (var bw = new BinaryWriter(o))
+        {
+            bw.Write(ms.ToArray()[..8]);
+            for (int part = 0; part < 3; part++)
+            {
+                bw.Write(1);
+                bw.Write("Dolan Pike");
+                bw.Write(500.0);
+            }
+        }
+
+        return s_outlawGood = o.ToArray();
+    }
+
+    static void LinkRead(PzaFuzz fz)
+    {
+        TwrRead(fz);                                                     // builds s_twrWorld and s_twrGood (and fuzzes the overrun reader once more)
+        var w = s_twrWorld!;
+        byte[] twrGood = s_twrGood!, outlawGood = OutlawGood();
+        byte[] Damage(byte[] b) => fz.Below(3) switch { 0 => fz.Mutate(b), 1 => b[..fz.Int(0, b.Length)], _ => BadLength(b, 8 + fz.Int(0, 4)) };
+
+        int which = fz.Below(3);                                         // 0: both good, 1: the overrun section damaged, 2: the outlaw section damaged
+        byte[] twr = which == 1 ? Damage(twrGood) : twrGood, outlaw = which == 2 ? Damage(outlawGood) : outlawGood;
+        bool twrIntact = twr.AsSpan().SequenceEqual(twrGood), outlawIntact = outlaw.AsSpan().SequenceEqual(outlawGood);
+
+        var (twrLink, outlawLink) = (new WastelandLink(() => null), new OutlawLink(() => null));
+        LinkSave.Read(new MemoryStream([.. twrGood, .. outlawGood]), w, twrLink, outlawLink);  // the links hold an earlier load
+        try
+        {
+            var r = LinkSave.Read(new MemoryStream([.. twr, .. outlaw]), w, twrLink, outlawLink);
+            fz.Expect(r.Overruns == twrLink.Pending, $"reported {r.Overruns} overruns, the link holds {twrLink.Pending}");
+            fz.Expect(r.OutlawTimes == outlawLink.Times, $"reported {r.OutlawTimes} outlaw times, the link holds {outlawLink.Times}");
+            if (r.Damage?.StartsWith("the save's waiting overruns", StringComparison.Ordinal) == true)
+                fz.Expect(twrLink.Pending == 0 && outlawLink.Times == 0, $"a damaged overrun section kept {twrLink.Pending} overruns and {outlawLink.Times} times");
+            if (twrIntact && outlawIntact) fz.Expect(r == new LinkSave.Result(2, 3, null), $"two good sections gave {r}");
+            if (twrIntact && !outlawIntact && r.Damage != null)
+                fz.Expect(r.Overruns == 2 && twrLink.Pending == 2, $"a damaged outlaw section lost the overruns ({r.Overruns}, holding {twrLink.Pending})");
+            fz.Count(which == 0 ? "clean" : which == 1 ? "twr.damaged" : "outlaw.damaged");
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            fz.Expect(false, $"LinkSave.Read threw {e.GetType().Name}: {e.Message} (the load would turn Dustlife off for the world)");
+        }
+    }
 
     static void TwrRead(PzaFuzz fz)
     {

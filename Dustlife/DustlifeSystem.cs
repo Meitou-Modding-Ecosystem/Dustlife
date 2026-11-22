@@ -137,20 +137,12 @@ public sealed class DustlifeSystem(PopulationData data, PopulationSystem? popula
         }
     }
 
-    /// <summary>The TWR link's waiting overruns, after the war in the save; a damaged section keeps none (the war itself is already read).</summary>
+    /// <summary>The links' sections after the war in the save (<see cref="LinkSave"/>); the war itself is already read.</summary>
     int ReadLink(MemoryStream ms)
     {
-        try
-        {
-            int waiting = _twr.Read(ms, _war!);
-            _outlaws.Read(ms);
-            return waiting;
-        }
-        catch (Exception e) when (e is InvalidDataException or EndOfStreamException or IOException)
-        {
-            log($"the save's waiting overruns could not be read ({e.Message}): none kept");
-            return 0;
-        }
+        var kept = LinkSave.Read(ms, _war!, _twr, _outlaws);
+        if (kept.Damage != null) log(kept.Damage);
+        return kept.Overruns;
     }
 
     void News()

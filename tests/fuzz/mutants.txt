@@ -92,3 +92,18 @@
 ===
         catch (FormatException e) when (e.Data.Count < 0)
 >>>
+
+@@ DL-link-kept | DustlifeMeitou\Dustlife\Game\LinkSave.cs | link.read | a damaged outlaw section reports no overruns while the link keeps them (the log says none kept)
+<<<
+            return new(waiting, 0, $"the save's outlaw
+===
+            return new(0, 0, $"the save's outlaw
+>>>
+
+@@ DL-link-stale | DustlifeMeitou\Dustlife\Game\LinkSave.cs | link.read | a damaged overrun section leaves the earlier load's outlaw times in place
+<<<
+            twr.Clear();
+            outlaws.Clear();
+===
+            twr.Clear();
+>>>

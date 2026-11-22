@@ -44,6 +44,17 @@ public sealed class OutlawLink(Func<Type?>? find = null)
 
     public bool Bound => _bound;
 
+    /// <summary>The strike, "not now" and first-seen times kept (for the tests and the log).</summary>
+    public int Times => _lastStrike.Count + _notNowUntil.Count + _firstSeen.Count;
+
+    /// <summary>Forgets every kept time (a damaged section in the save, <see cref="LinkSave"/>).</summary>
+    public void Clear()
+    {
+        _lastStrike.Clear();
+        _notNowUntil.Clear();
+        _firstSeen.Clear();
+    }
+
     static Type? FindTwr() => AppDomain.CurrentDomain.GetAssemblies()
         .FirstOrDefault(a => a.GetName().Name == "LivingWastelandMeitou")?.GetType("LivingWasteland.MeitouMod.WastelandApi");
 
