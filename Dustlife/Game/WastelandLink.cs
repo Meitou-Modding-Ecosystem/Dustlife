@@ -65,6 +65,7 @@ public sealed class WastelandLink(Func<Type?>? find = null)
         {
             EventType.Capture when e.B >= 0 && e.Key.StartsWith("took", StringComparison.Ordinal) => ("town-fell", "", weight),
             EventType.Rout when e.Key == "siege_end" => ("siege-broken", "", 55),
+            EventType.SiegeBegan => ("siege-began", "", e.Importance >= 2 ? 60 : 45),   // TWR has its own line for it
             EventType.Invasion when e.Key is "march" or "raid" => ("war-" + e.Key, w.Say(e), weight),
             _ => null,
         };

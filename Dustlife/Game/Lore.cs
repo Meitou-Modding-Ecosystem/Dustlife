@@ -69,6 +69,7 @@ public static class Lore
         // the reference's lore set-up also keeps an unguarded place with its holder until it is besieged undefended (claimsHold)
         FactionKeys = [HolyNation, UnitedCities, Shek, SlaveTraders, TradersGuild], MusterPatienceHours = 72, UseEconomy = true, ClaimsHold = true,
         Doctrines = Doctrines(), Motives = motives ? new MotiveConfig() : null,
+        Sieges = true, HoldHours = 7 * 24, Rhythm = true,                     // F1 (director-broker design, Part 4 checks)
     };
 
     public static EconomyConfig Economy(bool cutRoads) => new()

@@ -1,6 +1,6 @@
 {
   "id": "pza.dustlife",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "gameVersion": ">=0.21.0",
   "apiVersion": 2,
   "assemblies": ["Dustlife.dll"],

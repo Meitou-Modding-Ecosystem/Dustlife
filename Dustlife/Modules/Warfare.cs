@@ -47,7 +47,27 @@ public sealed class WarfareConfig
     /// <summary>Non-null: targets are weighed by motive (need, grievance, retaliation, opportunity, settling) and takings say why.
     /// Null = the reference's behaviour.</summary>
     public MotiveConfig? Motives;
+    /// <summary>
+    /// F1 sieges (`tools/euler/siege_check.py`): a besieged place holds for its endurance E, the besiegers stay for their
+    /// patience P, and neither fights the other until E is out (the investment). E days = base(kind) * (1 + 0.15 * garrison) *
+    /// (0.6 + 0.4 * food); P days = 3 + 7 * patience * (1 - 0.5 * shortage). Off = the reference's 24-72 h sieges and 12 h home guard.
+    /// </summary>
+    public bool Sieges;
+    public float EnduranceBaseDays = 10, EnduranceResourceDays = 7, EnduranceTerritoryDays = 3;
+    /// <summary>&gt; 0: a place just taken is nobody's target for this many hours (no seesaw).</summary>
+    public float HoldHours;
+    /// <summary>
+    /// F1 war rhythm (`tools/euler/war_rhythm_check.py`): a faction's war-weariness W grows by 1 / max(4, its bands) for each
+    /// band it loses and halves every <see cref="WearinessHalfDays"/>; at <see cref="ExhaustedAt"/> it stops starting offensives and raids;
+    /// once W is back to <see cref="RestedAt"/> after at least <see cref="MinExhaustedDays"/> it keeps a truce of
+    /// <see cref="TruceDaysMin"/> to <see cref="TruceDaysMax"/> days, then renews its war. Off = the reference's war without rest.
+    /// </summary>
+    public bool Rhythm;
+    public float WearinessHalfDays = 7, ExhaustedAt = 0.5f, RestedAt = 0.2f, MinExhaustedDays = 5, TruceDaysMin = 7, TruceDaysMax = 14;
 }
+
+/// <summary>F1: where a faction is in its war's rhythm.</summary>
+public enum WarPhase { Offensive, Exhausted, Truce }
 
 /// <summary>
 /// The territory war (after STALKER Anomaly's Warfare): garrisons, budgets, targets, invasions, sieges, patrols, comebacks, who holds a
@@ -68,6 +88,11 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         public double NextDefense, NextPatrol, NextTargets, SiegeSince = -1, MusterSince = -1;
         /// <summary>Why its holder took it (None until taken, or without motives).</summary>
         public Motive TakenFor;
+        /// <summary>F1: when the siege began (-1 = none), its endurance (hours) and phase (0 none, 1 investment, 2 starving, 3 ready to fall).</summary>
+        public double Invested = -1, Endurance;
+        public int Phase;
+        /// <summary>F1: nobody targets the place before this game hour.</summary>
+        public double HoldUntil = -1;
     }
 
     /// <summary>A faction's war state.</summary>
@@ -80,6 +105,10 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         public double[] NextFront = [-1, -1, -1, -1];
         /// <summary>When each front's next raid party may set out.</summary>
         public double[] NextRaid = [-1, -1, -1, -1];
+        /// <summary>F1 rhythm: war-weariness, the phase, when it began, when a truce ends, and the losses counted so far.</summary>
+        public double Weariness, PhaseSince, TruceEnds;
+        public WarPhase Phase;
+        public int LostSeen;
     }
 
     /// <summary>How often each rule fired (a rule that never fires is a failed test).</summary>
@@ -92,6 +121,10 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         /// <summary>Targets chosen and places taken, by motive; expansion targets passed over for having none.</summary>
         public long[] PickedFor = new long[Enum.GetValues<Motive>().Length], TookFor = new long[Enum.GetValues<Motive>().Length];
         public long NoMotive;
+        /// <summary>F1: sieges begun, starving, ready to fall; fights held during an investment; targets passed over while held.</summary>
+        public long Invested, Starving, ReadyToFall, HeldFire, Held, CutOff;
+        /// <summary>F1 rhythm: wars worn out, truces made, wars renewed, offensives and raids not started while resting.</summary>
+        public long Exhausted, Truces, Renewed, Resting;
     }
 
     public WarfareConfig Cfg { get; } = cfg;
@@ -209,6 +242,12 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         foreach (var (k, v) in _why.OrderBy(x => x.Key)) { w.Write(k); w.Write((int)v); }
         w.Write(_lostAt.Count);
         foreach (var (k, v) in _lostAt.OrderBy(x => x.Key)) { w.Write(k); w.Write(v); }
+
+        // F1 (appended: a save from before it simply ends here)
+        w.Write(Ps.Count);
+        foreach (var s in Ps) { w.Write(s.Invested); w.Write(s.Endurance); w.Write(s.Phase); w.Write(s.HoldUntil); }
+        w.Write(Fs.Count);
+        foreach (var f in Fs) { w.Write(f.Weariness); w.Write(f.PhaseSince); w.Write(f.TruceEnds); w.Write((int)f.Phase); w.Write(f.LostSeen); }
     }
 
     public Action Load(BinaryReader r, SaveMap map)
@@ -243,10 +282,41 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         int nl = WorldSave.Count(r);
         for (int i = 0; i < nl; i++) lost.Add((r.ReadInt64(), WorldSave.FinD(r)));
 
+        var f1 = new List<(int Id, double Inv, double End, int Phase, double Hold)>();
+        if (r.BaseStream.Position < r.BaseStream.Length)
+        {
+            int n1 = WorldSave.Count(r);
+            for (int i = 0; i < n1; i++)
+            {
+                double inv = WorldSave.FinD(r), end = WorldSave.FinD(r);
+                int phase = r.ReadInt32();
+                if (phase is < 0 or > 3) throw new InvalidDataException($"bad siege phase {phase}");
+                f1.Add((map.Place(i), inv, end, phase, WorldSave.FinD(r)));
+            }
+        }
+
+        var f1r = new List<(int Id, double Wear, double Since, double Truce, WarPhase Phase, int Lost)>();
+        if (r.BaseStream.Position < r.BaseStream.Length)
+        {
+            int n2 = WorldSave.Count(r);
+            for (int i = 0; i < n2; i++)
+            {
+                double wear = WorldSave.FinD(r), since = WorldSave.FinD(r), truce = WorldSave.FinD(r);
+                int ph = r.ReadInt32(), seenLost = r.ReadInt32();
+                if (!Enum.IsDefined((WarPhase)ph) || wear is < 0 or > 1e6 || seenLost < 0) throw new InvalidDataException($"bad war rhythm {ph} {wear} {seenLost}");
+                f1r.Add((map.Faction(i), wear, since, truce, (WarPhase)ph, seenLost));
+            }
+        }
+
         return () =>
         {
             foreach (var (id, s) in ps) { if (id < 0) continue; while (Ps.Count <= id) Ps.Add(new PlaceState()); Ps[id] = s; }
+            foreach (var (id, inv, end, phase, hold) in f1)
+                if (id >= 0 && id < Ps.Count) (Ps[id].Invested, Ps[id].Endurance, Ps[id].Phase, Ps[id].HoldUntil) = (inv, end, phase, hold);
             foreach (var (id, f) in fs) { if (id < 0) continue; while (Fs.Count <= id) Fs.Add(new FactionState()); Fs[id] = f; }
+            // after the faction states above are rebuilt (restoring it before them lost it: WarRhythmTests caught that)
+            foreach (var (id, wear, since, truce, ph, seen) in f1r)
+                if (id >= 0 && id < Fs.Count) (Fs[id].Weariness, Fs[id].PhaseSince, Fs[id].TruceEnds, Fs[id].Phase, Fs[id].LostSeen) = (wear, since, truce, ph, seen);
             _why.Clear();
             foreach (var (k, v) in why) if (Rekey(k, map) is { } nk) _why[nk] = v;
             _lostAt.Clear();
@@ -268,6 +338,79 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
     }
 
     bool Mine(Band b) => b.Owner == Cfg.Name;
+
+    /// <summary>F1: a place taken lately is nobody's target yet.</summary>
+    bool Held(World w, Place o) => Cfg.HoldHours > 0 && o.Id < Ps.Count && Ps[o.Id].HoldUntil > w.Now;
+
+    /// <summary>F1: how long a place holds out under siege (hours): its kind, its garrison and its holder's food.</summary>
+    public double EnduranceHours(World w, Place p)
+    {
+        float baseDays = p.Kind switch { PlaceKind.Base => Cfg.EnduranceBaseDays, PlaceKind.Resource => Cfg.EnduranceResourceDays, _ => Cfg.EnduranceTerritoryDays };
+        int garrison = p.Owner >= 0 ? w.CountSettled(p.Id, p.Owner) : 0;
+        float food = p.Owner >= 0 ? 1 - Shortage(w, p.Owner).Food : 1;
+        return 24.0 * baseDays * (1 + 0.15 * garrison) * (0.6 + 0.4 * food);
+    }
+
+    /// <summary>F1: how long a band besieges before giving up (hours): its leader's patience and its faction's shortage.</summary>
+    public double PatienceHours(World w, Band b)
+    {
+        var (food, arms) = Shortage(w, b.Faction);
+        return 24.0 * (3 + 7 * b.Leader[Axis.Patience] * (1 - 0.5 * Math.Max(food, arms)));
+    }
+
+    /// <summary>
+    /// F1: besiegers and the place's own defenders hold fire until the place is ready to fall (the investment); a relief column, a sortie
+    /// away from the place, or anyone else fights as before.
+    /// </summary>
+    public bool HoldsFire(World w, Band a, Band b)
+    {
+        if (!Cfg.Sieges) return false;
+        if (Holds(w, a, b) || Holds(w, b, a)) { Fired.HeldFire++; return true; }
+        return false;
+    }
+
+    bool Holds(World w, Band besieger, Band other)
+    {
+        // an invader marching on the place holds fire too: it invests the place, it doesn't storm it on arrival (seen in the balance runs:
+        // bands walking in one by one fought the garrison piecemeal and the siege was "broken at its walls" within a day or two)
+        bool investing = besieger.State == BandState.Siege || (besieger.State == BandState.Moving && besieger.Role == BandRole.Invader);
+        if (!Mine(besieger) || !investing || w.PlaceById(besieger.Target) is not { } t) return false;
+        return other.Faction == t.Owner && w.Settled(other, t.Id) && t.Id < Ps.Count && Ps[t.Id].Phase < 3;
+    }
+
+    /// <summary>F1: a place's siege clock: investment, starving at half its endurance, ready to fall at its end; reset when lifted.</summary>
+    void SiegeClock(World w, Place p, PlaceState s, bool besieged)
+    {
+        if (!besieged || p.Owner < 0)
+        {
+            if (s.Invested >= 0) (s.Invested, s.Endurance, s.Phase) = (-1, 0, 0);
+            return;
+        }
+
+        if (s.Invested < 0)
+        {
+            (s.Invested, s.Endurance, s.Phase) = (w.Now, EnduranceHours(w, p), 1);
+            Fired.Invested++;
+            return;
+        }
+
+        double t = w.Now - s.Invested;
+        string holder = w.Factions[p.Owner].Name;
+        int imp = p.Kind == PlaceKind.Base ? 2 : 1;
+        if (s.Phase == 1 && t >= s.Endurance / 2)
+        {
+            s.Phase = 2;
+            Fired.Starving++;
+            w.Emit(EventType.Info, -1, p.Owner, p.Id, p.Pos, imp, "siege_starving", p.Name, holder);
+        }
+
+        if (s.Phase == 2 && t >= s.Endurance)
+        {
+            s.Phase = 3;
+            Fired.ReadyToFall++;
+            w.Emit(EventType.Info, -1, p.Owner, p.Id, p.Pos, imp, "siege_ready", p.Name, holder);
+        }
+    }
 
     /// <summary>
     /// A stable 0..1 value per index. It must not draw from the world's generator: it also runs while a save is loaded, after the
@@ -448,6 +591,8 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
             Fs[i].PatrolPop = 1 + (int)(br + 0.5f);
         }
 
+        if (Cfg.Rhythm) WarRhythm(w, dt);
+
         foreach (var p in w.Places)
         {
             if (p.Kind != PlaceKind.Base || p.Owner < 0 || p.PlayerOwned || !InScope(w, p.Id) || !FactionInScope(w, p.Owner)) continue;
@@ -457,6 +602,45 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         Resurgence(w, rel);
         RaidParties(w, rel);
     }
+
+    /// <summary>
+    /// F1: each faction's war-weariness and its phase: offensive, exhausted, truce, then offensive again (see <see cref="WarfareConfig.Rhythm"/>).
+    /// </summary>
+    void WarRhythm(World w, float dt)
+    {
+        double fade = Math.Pow(0.5, dt / (24.0 * Math.Max(0.1, Cfg.WearinessHalfDays)));
+        for (int i = 0; i < w.Factions.Count; i++)
+        {
+            if (!FactionInScope(w, i)) continue;
+            var s = Fs[i];
+            var f = w.Factions[i];
+            int lost = Math.Max(0, f.Lost - s.LostSeen);
+            s.LostSeen = f.Lost;
+            s.Weariness = s.Weariness * fade + lost / (double)Math.Max(4, s.Bands);
+            switch (s.Phase)
+            {
+                case WarPhase.Offensive when s.Weariness >= Cfg.ExhaustedAt:
+                    (s.Phase, s.PhaseSince) = (WarPhase.Exhausted, w.Now);
+                    Fired.Exhausted++;
+                    w.Emit(EventType.Info, i, -1, -1, default, 2, "war_exhausted", f.Name);
+                    break;
+                case WarPhase.Exhausted when s.Weariness <= Cfg.RestedAt && w.Now - s.PhaseSince >= 24.0 * Cfg.MinExhaustedDays:
+                    (s.Phase, s.PhaseSince) = (WarPhase.Truce, w.Now);
+                    s.TruceEnds = w.Now + 24.0 * w.Rng.Range(Cfg.TruceDaysMin, Cfg.TruceDaysMax);
+                    Fired.Truces++;
+                    w.Emit(EventType.Info, i, -1, -1, default, 2, "war_truce", f.Name);
+                    break;
+                case WarPhase.Truce when w.Now >= s.TruceEnds:
+                    (s.Phase, s.PhaseSince) = (WarPhase.Offensive, w.Now);
+                    Fired.Renewed++;
+                    w.Emit(EventType.Info, i, -1, -1, default, 2, "war_renewed", f.Name);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>F1: whether a faction is resting from its war (no new offensives or raids).</summary>
+    public bool Resting(int faction) => Cfg.Rhythm && faction >= 0 && faction < Fs.Count && Fs[faction].Phase != WarPhase.Offensive;
 
     // ------------------------------------------------------------------ raid parties
 
@@ -471,6 +655,7 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         {
             int f = w.FindFaction(doc.Faction);
             if (f < 0 || !FactionInScope(w, f) || doc.NoInvade) continue;
+            if (Resting(f)) { Fired.Resting++; continue; }
             for (int k = 0; k < doc.Fronts.Count && k < Doctrine.MaxFronts; k++)
             {
                 var fr = doc.Fronts[k];
@@ -494,6 +679,7 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
             float pow = w.SettledPower(o.Id, o.Owner);
             if (fr.WeakBelow > 0 && pow >= fr.WeakBelow) continue;
             if (w.CountHeadingTo(o.Id, f) > 0) continue;                    // one party at a time per place
+            if (Held(w, o)) { Fired.Held++; continue; }
             if (pow < bestPow) (bestPow, best) = (pow, o);
         }
 
@@ -529,6 +715,16 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
     {
         var s = Ps[p.Id];
         int f = p.Owner;
+        // F1: an invested town is cut off: no new garrison raised inside and no patrols sent out (the balance runs showed its own patrols and
+        // fresh garrisons wiping the besiegers one by one, ~20 bands a run); a relief army from elsewhere can still break the siege
+        bool cutOff = Cfg.Sieges && s.Phase is 1 or 2;
+        if (cutOff)
+        {
+            Fired.CutOff++;
+            if (w.Now >= s.NextTargets) { s.NextTargets = w.Now + w.Rng.Range(Cfg.TargetHoursMin, Cfg.TargetHoursMax); PickTargets(w, p, rel); }
+            return;
+        }
+
         if (w.Now >= s.NextDefense)
         {
             // garrisons come back faster the more of the world the faction holds
@@ -601,6 +797,7 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
             {
                 var o = w.Places.Find(x => x.Name == doc.Order[k]);
                 if (o == null || o.Owner == f) continue;                   // ours already: the next one in order
+                if (Held(w, o)) { Fired.Held++; break; }                    // just taken: the order waits rather than skipping ahead
                 if (!InScope(w, o.Id) || (o.Owner >= 0 && !w.Hostile(f, o.Owner, rel))) continue;
                 forced = o.Id;
                 Fired.Ordered++;
@@ -628,6 +825,7 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         foreach (var o in w.Places)
         {
             if (o.Id == n.Id || o.Kind == PlaceKind.Lair || !InScope(w, o.Id) || (o.PlayerOwned && !Cfg.AllowPlayerTargets) || o.Owner == f) continue;
+            if (Held(w, o)) { Fired.Held++; continue; }
             bool enemy = o.Owner >= 0 && w.Hostile(f, o.Owner, rel);
             if ((o.Owner >= 0 && !enemy) || o.Id == s.Targets[0] || o.Id == s.Targets[1]) continue;
             if (doc != null)
@@ -727,6 +925,16 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         {
             var t = w.Places[s.InvTarget];
             if (t.Owner == f || (t.Owner >= 0 && !w.Hostile(f, t.Owner, rel)) || !InScope(w, t.Id)) Drop(s, false);
+            else if (Held(w, t)) { Fired.Held++; Drop(s, true); }              // taken since it was picked: wait out its hold
+        }
+
+        if (Resting(f))
+        {
+            // the faction rests: no new offensive, and one still mustering stands down (the war.rhythm fuzz target caught a mustered
+            // invasion marching after its faction was worn out); its garrisons still hold
+            if (s.Targets[0] >= 0 || s.InvTarget >= 0) Fired.Resting++;
+            if (s.InvTarget >= 0) Drop(s, false);
+            return;
         }
 
         if (s.InvTarget < 0)
@@ -734,6 +942,7 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
             foreach (int t in s.Targets)
             {
                 if (t < 0 || !InScope(w, t) || w.CountHeadingTo(t, f) >= n.Cap) continue;
+                if (Held(w, w.Places[t])) { Fired.Held++; continue; }
                 s.InvTarget = t;
                 s.InvSize = Math.Clamp((int)(w.Places[t].Cap * Fs[f].InvasionFactor * (0.5f + 0.5f * n.Aggression) + 0.5f), 1, 16);
                 s.InvDepartWait = w.Rng.Range(Cfg.DepartHoursMin, Cfg.DepartHoursMax);
@@ -918,6 +1127,7 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
             foreach (var o in w.Places)
             {
                 if (o.Kind != PlaceKind.Base || o.PlayerOwned || !InScope(w, o.Id) || (o.Owner >= 0 && !w.Hostile(fi, o.Owner, rel))) continue;
+                if (Held(w, o)) { Fired.Held++; continue; }                     // a comeback waits out the hold too
                 float d = Vector2.DistanceSquared(home.Pos, o.Pos);
                 if (d < bd) (bd, target) = (d, o);
             }
@@ -967,9 +1177,11 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
         {
             float dd = Vector2.Distance(b.Pos, t.Pos);
             b.Pos = dd > 1.0f ? t.Pos + (b.Pos - t.Pos) / dd * Cfg.SiegeOffset : t.Pos + new Vector2(Cfg.SiegeOffset, 0);
+            bool first = !w.Bands.Any(o => o != b && o.Alive && o.Faction == b.Faction && o.State == BandState.Siege && o.Target == t.Id);
             b.State = BandState.Siege;
-            b.StayUntil = w.Now + 24.0f + 48.0f * b.Leader[Axis.Patience];
+            b.StayUntil = Cfg.Sieges ? w.Now + PatienceHours(w, b) : w.Now + 24.0f + 48.0f * b.Leader[Axis.Patience];
             Fired.Sieges++;
+            if (first) w.Emit(EventType.SiegeBegan, b.Faction, t.Owner, t.Id, t.Pos, t.Kind == PlaceKind.Base ? 2 : 1, "siege_begin", w.Factions[b.Faction].Name, t.Name, w.Factions[t.Owner].Name);
             return true;
         }
 
@@ -1086,6 +1298,7 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
             if (p.Kind == PlaceKind.Lair || p.PlayerOwned || !InScope(w, p.Id)) continue;
             if (p.Owner >= 0 && !FactionInScope(w, p.Owner) && Cfg.FactionKeys.Count > 0) continue;   // not this front's place
             var s = Ps[p.Id];
+            if (Cfg.Sieges) SiegeClock(w, p, s, besieged.Contains(p.Id));
             settled.Clear();
             var here = w.Bands.Where(b => b.Alive && !w.Factions[b.Faction].Fauna && w.Settled(b, p.Id)).ToList();
             foreach (var b in here) settled[b.Faction] = settled.GetValueOrDefault(b.Faction) + 1;
@@ -1099,7 +1312,7 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
             {
                 if (!underSiege) { s.SiegeSince = -1; continue; }
                 if (s.SiegeSince < 0) { s.SiegeSince = w.Now; continue; }
-                if (w.Now - s.SiegeSince < Cfg.HomeGuardHours) continue;
+                if (Cfg.Sieges ? s.Phase < 3 : w.Now - s.SiegeSince < Cfg.HomeGuardHours) continue;   // F1: until ready to fall
                 s.SiegeSince = -1;
                 p.Owner = -1;
                 s.Targets[0] = s.Targets[1] = -1;
@@ -1126,6 +1339,7 @@ public sealed class Warfare(WarfareConfig cfg) : IModule, ISavedModule
             s.TakenFor = Motive.None;
             if (o >= 0 && Cfg.Motives != null) _lostAt[Key(o, p.Id)] = w.Now;
             if (cand < 0) continue;
+            if (Cfg.HoldHours > 0) s.HoldUntil = w.Now + Cfg.HoldHours;
             w.Factions[cand].Captures++;
             Fired.Captures++;
             var credit = here.Where(b => b.Faction == cand).OrderByDescending(b => b.Leader.Renown).ThenBy(b => b.Id).FirstOrDefault();

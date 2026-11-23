@@ -21,6 +21,7 @@ public static class GameSource
     {
         var w = new Core.World();
         w.Cfg.Speed = Lore.GameSpeed;
+        w.Cfg.WarlordsSurvive = true;                  // F1: commanders last (director-broker design)
         var factions = Factions(data);
         GameMap.Build(w, factions, Towns(data));
         var edges = VanillaEdges.Build(data).Select(e => (Key(e.From), Key(e.To), e.Cost, e.Kind == EdgeKind.Overland));

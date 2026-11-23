@@ -1,6 +1,6 @@
 # Dustlife for Meitou
 
-> **Version 0.6.0** (the war runs in the game, off screen, from the game's own towns and roads; marching bands near the player become the game's own squads, fight what they meet once loaded (on Meitou 0.22.1 too) and go back to Dustlife where Meitou can despawn them (VlcekM/MeitouClient#1173); its news reaches The Wasteland Remembers' news board, and as a test setting (off) its war bands scatter TWR's outlaw camps within TWR's limits; under Rivalry Core's limits when it is loaded; not released, not yet tried in game) · Meitou mod id `pza.dustlife` · engine pin `1cc76a0`
+> **Version 0.7.0** (the war told as a story (`WarStory`, the balance runner's `--story`); sieges with endurance and patience (3 to 10 days, about 1 in 10 ends in a fall, the rule brute-forced in `tools/euler/siege_check.py`), a 7-day hold on a place just taken, war host leaders who ride out of a rout, war-weariness with truces (`tools/euler/war_rhythm_check.py`); on top of 0.6.0: real squads near the player, TWR's news board and outlaw camps (a test setting, off), Rivalry Core's limits; not released, not yet tried in game) · Meitou mod id `pza.dustlife` · engine pin `1cc76a0`
 
 Dustlife, A-Life for Kenshi, as a [MeitouClient](https://github.com/Meitou-Modding-Ecosystem/MeitouClient) code mod: the whole map stays at
 war while the player is elsewhere. Factions hold towns, raise garrisons from what their towns produce, send their surplus to take more, and

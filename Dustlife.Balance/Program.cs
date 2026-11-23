@@ -4,7 +4,7 @@
 // (same place kinds, resource points, caps, locked places, modules, speed), runs it hour by hour with no player near anything, and
 // reports what the reference's runs recorded, so the two can be compared on the same seeds.
 //   Usage: dotnet run -- --map <map.tsv> [--days 90] [--seed 1] [--runs 1] [--scenario stack|ease] [--tag NAME] [--out runs.csv] [--motives]
-//          [--edges <edges.tsv>] [--cutroads] [--hub]
+//          [--edges <edges.tsv>] [--cutroads] [--hub] [--story <file>]  (the first run's war story, and story metrics for all)
 // The map file (F / H / P / N lines: factions, hostile pairs, factions hostile to the player, places) is made from the game's data and
 // stays outside the repo.
 using System.Globalization;
@@ -20,6 +20,7 @@ const float bastRadius = Lore.BastRadius, ucWeakBelow = Lore.UcWeakBelow;
 string mapPath = "", scenario = "", tag = "", outCsv = "dustlife_balance_runs.csv";
 int days = 90, runs = 1;
 bool motives = false, cutRoads = false, hub = false;
+string storyPath = "";
 string edgesPath = "";
 ulong seed = 1;
 for (int i = 0; i < args.Length; i++)
@@ -39,6 +40,7 @@ for (int i = 0; i < args.Length; i++)
         case "--edges": edgesPath = Next(); break;
         case "--cutroads": cutRoads = true; break;
         case "--hub": hub = true; break;
+        case "--story": storyPath = Next(); break;
         default: throw new ArgumentException($"unknown argument {a}");
     }
 }
@@ -47,6 +49,7 @@ var map = MapFile.Read(mapPath);
 if (cutRoads && edgesPath.Length == 0) throw new ArgumentException("--cutroads needs --edges");
 var results = new List<RunResult>();
 (int Matched, int Missed) roadsMatched = (0, 0);
+ulong firstSeed = seed;
 for (int k = 0; k < runs; k++) results.Add(Run(seed + (ulong)k));
 
 bool fresh = !File.Exists(outCsv);
@@ -68,6 +71,16 @@ Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
     $"  front still moving after day 60 in {results.Count(r => r.BastLastDay > 60)} of {runs} runs"));
 Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
     $"  Okran's Shield: Holy Nation power (last 30 days) {Mean(r => r.OsPowLate):0} | UC took it in {results.Count(r => r.UcOsTook > 0)} runs | Stack fell in {results.Count(r => r.StackFell > 0)} runs"));
+{
+    // the story metrics (design section 12): medians over the runs that had any
+    static double Med(IEnumerable<double> xs) { var v = xs.Where(x => !double.IsNaN(x)).OrderBy(x => x).ToList(); return v.Count == 0 ? double.NaN : v[v.Count / 2]; }
+    Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+        $"  story: arcs {Mean(r => r.Story.Arcs):0} a run, sieges {Mean(r => r.Story.Sieges):0}, siege length median {Med(results.Select(r => r.Story.SiegeDaysMedian)):0.00} days (target 3-10), sieges that ended in a fall {100 * Med(results.Select(r => r.Story.FallShare)):0}% (target <= 20%), captures {Mean(r => r.Story.Captures):0}, flip-backs within 7 days {Mean(r => r.Story.FlipBacks):0.0} a run (target 0), warlord tenure median {Med(results.Select(r => r.Story.WarlordDaysMedian)):0.0} days (target >= 21)"));
+    Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+        $"  rhythm: wars worn out {Mean(r => r.Exhaustions):0.0} a run, renewed {Mean(r => r.Renewals):0.0}; a major faction loses {Mean(r => r.MajorLossesPerDay):0.00} bands a day"));
+    Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+        $"  besieging bands wiped near their siege, by: the holder {Mean(r => r.Broken.Defender):0.0}, a third faction {Mean(r => r.Broken.Third):0.0}, wildlife {Mean(r => r.Broken.Fauna):0.0}, unknown {Mean(r => r.Broken.None):0.0} a run"));
+}
 Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
     $"  Holy Nation lost every base in {results.Count(r => r.NoBaseDay[0] > 0)}, Shek in {results.Count(r => r.NoBaseDay[2] > 0)} | falsifiers {results.Sum(r => r.Falsifiers)}"));
 Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
@@ -93,6 +106,7 @@ RunResult Run(ulong s)
     var w = new World();
     w.Rng.State = s == 0 ? 1 : unchecked(s * 0x9E3779B97F4A7C15UL);
     w.Cfg.Speed = Lore.GameSpeed;
+    w.Cfg.WarlordsSurvive = true;                      // F1, as the game runs it
     var rel = map.Build(w);
     if (edgesPath.Length > 0) roadsMatched = RoadFile.Load(edgesPath, w);
     var war = Lore.War(motives, hub);
@@ -106,6 +120,7 @@ RunResult Run(ulong s)
     Scenario(w);
 
     var r = new RunResult { Seed = s };
+    var story = new WarStory();
     int fHn = w.FindFaction(kHn), fUc = w.FindFaction(kUc), fSk = w.FindFaction(kShek), fSt = w.FindFaction(kSt), fTg = w.FindFaction(kTg);
     int[] owner0 = [.. w.Places.Select(p => p.Owner)];
     int[] lastHeld = [.. owner0];
@@ -119,6 +134,7 @@ RunResult Run(ulong s)
         {
             clock += 1;
             w.Advance(clock, rel);
+            story.Read(w);
             foreach (var e in w.Events)
             {
                 if (e.Seq <= lastSeq) continue;
@@ -180,6 +196,13 @@ RunResult Run(ulong s)
     }
 
     r.Ms = sw.ElapsedMilliseconds;
+    r.Story = story.Metrics();
+    r.Exhaustions = story.Exhaustions;
+    r.Broken = (story.BrokenByDefender, story.BrokenByThird, story.BrokenByFauna, story.BrokenByNone);
+    r.Renewals = story.Renewals;
+    r.MajorLossesPerDay = new[] { fHn, fUc, fSk }.Where(f => f >= 0).Sum(f => w.Factions[f].Lost) / 3.0 / days;
+    if (storyPath.Length > 0 && s == firstSeed)
+        File.WriteAllText(storyPath, $"War story, seed {s}, {days} days\n\n" + story.Render() + "\n--- line by line ---\n" + string.Join("\n", story.Lines) + "\n");
     r.TookFor = [.. warfare.Fired.TookFor];
     r.PickedFor = [.. warfare.Fired.PickedFor];
     r.NoMotive = warfare.Fired.NoMotive;
@@ -231,6 +254,10 @@ void Scenario(World w)
 sealed class RunResult
 {
     public ulong Seed;
+    public (int Arcs, int Sieges, double SiegeDaysMedian, double FallShare, int Captures, int FlipBacks, double WarlordDaysMedian) Story;
+    public int Exhaustions, Renewals;
+    public (int Defender, int Third, int Fauna, int None) Broken;
+    public double MajorLossesPerDay;
     public int[] UcBast = [0, 0, 0];
     public int BastTotal, HnBastTook, UcBastTook, BastLastDay, UcOsTook, StackFell, Falsifiers;
     public int[] NoBaseDay = [0, 0, 0];

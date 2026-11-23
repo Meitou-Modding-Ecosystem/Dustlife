@@ -44,7 +44,200 @@ static class Program
             foreach (var rule in new[] { "clean", "twr.damaged", "outlaw.damaged" })
                 fz.Expect(fz.Counted(rule) > 0, $"rule '{rule}' never fired in {fz.Case} cases (a rule that never fires is a failed test)");
         }),
+        new("war.rhythm", 1500, WarRhythmFuzz, fz =>
+        {
+            foreach (var rule in new[] { "exhausted", "truce", "renewed", "resting", "saved" })
+                fz.Expect(fz.Counted(rule) > 0, $"rule '{rule}' never fired in {fz.Case} cases (a rule that never fires is a failed test)");
+        }),
+        new("siege.clock", 1500, SiegeClock, fz =>
+        {
+            foreach (var rule in new[] { "invested", "starving", "ready", "lifted", "overrun", "heldfire", "stale" })
+                fz.Expect(fz.Counted(rule) > 0, $"rule '{rule}' never fired in {fz.Case} cases (a rule that never fires is a failed test)");
+        }),
     ]);
+
+    // ----------------------------------------------------------------------------------------------------------------------- war.rhythm
+
+    /// <summary>
+    /// F1 war rhythm with random strengths and losses: the phase moves only offensive -> exhausted -> truce -> offensive; exhausted only at
+    /// W >= ExhaustedAt; a truce only after the minimum days and at W <= RestedAt; a resting faction starts no march; weariness never below 0;
+    /// a save and load in the middle keeps the phase, the weariness and the losses counted.
+    /// </summary>
+    static void WarRhythmFuzz(PzaFuzz fz)
+    {
+        float halfDays = fz.Chance(0.5) ? 7 : (float)fz.Range(1, 10);
+        World Make(out Warfare war)
+        {
+            var w = new World();
+            w.Rng.State = 21;
+            w.AddFaction("hn", "Holy Nation", false, false);
+            w.AddFaction("sk", "Shek", false, false);
+            w.AddPlace("stack", "Stack", Vector2.Zero, PlaceKind.Base, 3, 0);
+            w.AddPlace("squin", "Squin", new Vector2(40000, 0), PlaceKind.Base, 3, 1);
+            // a random fade: at the default 7 days the minimum days exhausted never bind (7 * log2(0.5 / 0.2) = 9.25 days > 5), so a faster
+            // fade is needed to test that guard at all
+            war = new Warfare(new WarfareConfig { SeedGarrisons = false, Rhythm = true, WearinessHalfDays = halfDays });
+            w.AddModule(war);
+            w.StartNew();
+            return w;
+        }
+
+        var w = Make(out var war);
+        var rel = new SiegeRel(0, 1);
+        for (int f = 0; f < 2; f++)
+            for (int k = fz.Int(1, 16); k > 0; k--) w.SpawnBand(f, f, BandRole.Garrison, w.Places[f].Pos, "warfare");
+        var last = new WarPhase[2];
+        bool saved = false;
+        for (int t = fz.Int(24, 24 * 60); t > 0; t--)
+        {
+            for (int f = 0; f < 2; f++)
+            {
+                if (fz.Chance(0.03))                                                           // a loss: one of its bands dies far away
+                    if (w.FindBand(w.SpawnBand(f, -1, BandRole.Garrison, new Vector2(0, 900000 + t), "warfare")) is { } b) w.Kill(b);
+                if (fz.Chance(0.02)) w.SpawnBand(f, f, BandRole.Garrison, w.Places[f].Pos, "warfare");   // recruits
+            }
+
+            long seq = w.Events.Count == 0 ? -1 : w.Events[^1].Seq;
+            var before = new[] { war.Fs[0].Phase, war.Fs[1].Phase };
+            var since = new[] { war.Fs[0].PhaseSince, war.Fs[1].PhaseSince };
+            for (int q = 0; q < 4; q++) w.Tick(0.25f, rel);
+            for (int f = 0; f < 2; f++)
+            {
+                var s = war.Fs[f];
+                fz.Expect(s.Weariness >= 0 && double.IsFinite(s.Weariness), $"weariness {s.Weariness}");
+                if (s.Phase != before[f])
+                {
+                    // one step forward round the cycle, or two in the same hour (a truce ends and the faction, still losing bands, wears out again)
+                    bool ok = (before[f], s.Phase) is (WarPhase.Offensive, WarPhase.Exhausted) or (WarPhase.Exhausted, WarPhase.Truce) or (WarPhase.Truce, WarPhase.Offensive)
+                        or (WarPhase.Truce, WarPhase.Exhausted);
+                    fz.Expect(ok, $"phase jumped {before[f]} -> {s.Phase}");
+                    if (before[f] == WarPhase.Truce && s.Phase == WarPhase.Exhausted) fz.Count("renewed");
+                    if (s.Phase == WarPhase.Exhausted) { fz.Count("exhausted"); fz.Expect(s.Weariness >= war.Cfg.ExhaustedAt * Math.Pow(0.5, 1.0 / (24 * halfDays)) - 1e-9, $"exhausted at W {s.Weariness:0.000}"); }   // at most an hour of fading since
+                    if (s.Phase == WarPhase.Truce)
+                    {
+                        fz.Count("truce");
+                        fz.Expect(s.Weariness <= war.Cfg.RestedAt + 1e-9, $"a truce at W {s.Weariness:0.00}");
+                        fz.Expect(w.Now - since[f] >= 24 * war.Cfg.MinExhaustedDays - 1, $"a truce after {(w.Now - since[f]) / 24:0.0} days exhausted");
+                    }
+                    if (s.Phase == WarPhase.Offensive) fz.Count("renewed");
+                }
+
+                if (war.Resting(f)) fz.Count("resting");
+            }
+
+            foreach (var e in w.Events.Where(e => e.Seq > seq && e.Type == EventType.Invasion))
+                fz.Expect(before[e.A] == WarPhase.Offensive || war.Fs[e.A].Phase == WarPhase.Offensive, $"faction {e.A} marched while {before[e.A]}");
+
+            if (!saved && (war.Fs[0].Phase != WarPhase.Offensive || war.Fs[1].Phase != WarPhase.Offensive) && fz.Chance(0.3))
+            {
+                saved = true;
+                using var ms = new MemoryStream();
+                WorldSave.Write(w, ms);
+                ms.Position = 0;
+                var w2 = Make(out var war2);
+                WorldSave.Read(w2, ms);
+                for (int f = 0; f < 2; f++)
+                    fz.Expect(war2.Fs[f].Phase == war.Fs[f].Phase && Math.Abs(war2.Fs[f].Weariness - war.Fs[f].Weariness) < 1e-9 && war2.Fs[f].LostSeen == war.Fs[f].LostSeen,
+                        $"the rhythm of faction {f} changed in a save: {war.Fs[f].Phase}/{war.Fs[f].Weariness:0.000} -> {war2.Fs[f].Phase}/{war2.Fs[f].Weariness:0.000}");
+                fz.Count("saved");
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------- siege.clock
+
+    sealed class SiegeRel(int a, int b) : IRelations
+    {
+        public bool Hostile(int x, int y) => (x == a && y == b) || (x == b && y == a);
+        public bool HostileToPlayer(int faction) => false;
+    }
+
+    /// <summary>
+    /// F1 sieges on a small war with random besiegers, garrisons, patience and lifts: the phase only rises within one siege and is 0 with
+    /// none; starving only after half the endurance, ready only after all of it; besiegers and defenders never hold fire once the place is
+    /// ready; a home town is overrun only when ready; nobody marches on a place inside its hold time.
+    /// </summary>
+    static void SiegeClock(PzaFuzz fz)
+    {
+        var w = new World();
+        w.Rng.State = (ulong)fz.Int(1, int.MaxValue);
+        int hn = w.AddFaction("hn", "Holy Nation", false, false);
+        int sk = w.AddFaction("sk", "Shek", false, false);
+        var kind = fz.Pick(new[] { PlaceKind.Base, PlaceKind.Resource, PlaceKind.Territory });
+        int stack = w.AddPlace("stack", "Stack", Vector2.Zero, kind, 3, hn);
+        int squin = w.AddPlace("squin", "Squin", new Vector2(30000, 0), PlaceKind.Base, 3, sk);
+        int teeth = w.AddPlace("teeth", "Bad Teeth", new Vector2(-30000, 0), PlaceKind.Base, 3, hn);   // a second Holy town: it can pick Stack while Stack stands empty
+        var war = new Warfare(new WarfareConfig { SeedGarrisons = false, Sieges = true, HoldHours = fz.Chance(0.5) ? fz.Int(1, 400) : 0 });
+        w.AddModule(war);
+        w.StartNew();
+        var rel = new SiegeRel(hn, sk);
+        if (fz.Chance(0.7)) war.Ps[stack].NextDefense = 1e9;
+        war.Ps[squin].NextTargets = fz.Chance(0.5) ? 1e9 : 0;                         // Squin's own war on Stack: on in half the cases
+        for (int k = fz.Int(0, 3); k > 0; k--) w.SpawnBand(hn, stack, BandRole.Garrison, Vector2.Zero, "warfare");
+        for (int k = fz.Int(0, 6); k > 0; k--) w.SpawnBand(sk, squin, BandRole.Garrison, w.Places[squin].Pos, "warfare");
+        for (int k = fz.Int(2, 8); k > 0; k--) w.SpawnBand(hn, teeth, BandRole.Garrison, w.Places[teeth].Pos, "warfare");   // enough to muster a march
+
+        int lastPhase = 0;
+        double lastInvested = -1;
+        for (int t = fz.Int(10, 800); t > 0; t--)
+        {
+            if (fz.Chance(0.02) && w.FindBand(w.SpawnBand(sk, squin, BandRole.Invader, new Vector2(900, 0), "warfare")) is { } nb)
+            {
+                nb.Leader[Axis.Patience] = (float)fz.Range(0, 1);
+                (nb.Target, nb.TargetPos) = (stack, Vector2.Zero);
+                war.OnArrive(w, nb, rel);
+            }
+
+            if (fz.Chance(0.003))                                                        // sieges must be able to outlast an endurance (3 to 15 days)
+                foreach (var b in w.Bands.Where(b => b.Alive && b.State == BandState.Siege).ToList()) { w.Kill(b); fz.Count("lifted"); }
+
+            long seq = w.Events.Count == 0 ? -1 : w.Events[^1].Seq, ready0 = war.Fired.ReadyToFall;
+            double hold0 = war.Ps[stack].HoldUntil;
+            int owner0 = w.Places[stack].Owner;
+            for (int q = 0; q < 4; q++) w.Tick(0.25f, rel);
+
+            var s = war.Ps[stack];
+            fz.Expect(s.Phase is >= 0 and <= 3, $"phase {s.Phase}");
+            bool besieged = w.Places[stack].Owner >= 0 && w.Bands.Any(b => b.Alive && b.State == BandState.Siege && b.Target == stack);
+            if (!besieged && w.Places[stack].Owner == owner0) fz.Expect(s.Invested < 0 && s.Phase == 0, $"no siege, but its clock runs (since {s.Invested:0}, phase {s.Phase}; owner {w.Places[stack].Owner}; "
+                + string.Join(", ", w.Bands.Where(b => b.Target == stack || b.State == BandState.Siege).Select(b => $"{b.Faction}:{b.State}:{b.Target}:{(b.Alive ? "alive" : "dead")}")) + ")");
+            if (s.Invested >= 0)
+            {
+                double el = w.Now - s.Invested;
+                if (s.Phase >= 2) fz.Expect(el >= s.Endurance / 2 - 1e-6, $"starving after {el:0.0} h of {s.Endurance:0.0}");
+                if (s.Phase == 3) fz.Expect(el >= s.Endurance - 1e-6, $"ready after {el:0.0} h of {s.Endurance:0.0}");
+                if (s.Invested == lastInvested) fz.Expect(s.Phase >= lastPhase, $"phase fell from {lastPhase} to {s.Phase} in one siege");
+            }
+            else fz.Expect(s.Phase == 0, $"phase {s.Phase} with no siege");
+            if (s.Phase == 1 && lastPhase == 0) fz.Count("invested");
+            if (s.Phase == 2 && lastPhase < 2) fz.Count("starving");
+            if (s.Phase == 3 && lastPhase < 3) fz.Count("ready");
+
+            foreach (var e in w.Events.Where(e => e.Seq > seq))
+            {
+                if (e.Key == "overrun" && e.Place == stack)
+                {
+                    fz.Count("overrun");
+                    fz.Expect(lastPhase == 3 || war.Fired.ReadyToFall > ready0, $"overrun before the place was ready (phase {lastPhase})");
+                }
+
+                if (e.Type == EventType.Capture && e.Place == stack && e.A == sk && fz.Chance(0.7))
+                {
+                    war.Ps[teeth].Targets[0] = stack;                                    // a stale pick from before the capture (picked while empty)
+                    fz.Count("stale");
+                }
+
+                if (e.Type == EventType.Invasion && e.Place == stack)
+                    fz.Expect(hold0 <= e.Time, $"a march on Stack at {e.Time:0} inside its hold until {hold0:0}");   // the hold as it stood then
+            }
+
+            foreach (var a in w.Bands.Where(b => b.Alive && b.State == BandState.Siege && b.Target == stack).ToList())
+                foreach (var d in w.Bands.Where(b => b.Alive && b.Faction == hn && w.Settled(b, stack)).ToList())
+                    if (war.HoldsFire(w, a, d)) { fz.Count("heldfire"); fz.Expect(s.Phase < 3, "held fire at a place ready to fall"); }
+
+            (lastPhase, lastInvested) = (s.Phase, s.Invested);
+        }
+    }
 
     // -------------------------------------------------------------------------------------------------------------------- outlaw.strike
 
