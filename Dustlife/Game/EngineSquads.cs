@@ -24,6 +24,33 @@ public sealed class EngineSquads(Meitou.Simulation.World world, PopulationSystem
     static readonly MethodInfo? Despawn = typeof(PopulationSystem).GetMethod(
         "DespawnPlatoon", BindingFlags.Public | BindingFlags.Instance, [typeof(Meitou.Simulation.World), typeof(int)]);
 
+    // SpawnPlatoon gained an optional maxMembers parameter in Meitou 0.22.2-nightly.20261124.3 (binary-incompatible with 0.21 / 0.22.1):
+    // resolved by name and parameter shape, filling any trailing optional parameters with their defaults, so one build runs on both.
+    static readonly MethodInfo? SpawnPlatoonMethod = typeof(PopulationSystem)
+        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        .FirstOrDefault(m =>
+        {
+            if (m.Name != "SpawnPlatoon" || m.ReturnType != typeof(int)) return false;
+            var ps = m.GetParameters();
+            return ps.Length >= 8
+                && ps[0].ParameterType == typeof(Meitou.Simulation.World) && ps[1].ParameterType == typeof(int)
+                && ps[2].ParameterType == typeof(string) && ps[3].ParameterType == typeof(int)
+                && ps[4].ParameterType == typeof(Vector2) && ps[5].ParameterType == typeof(float)
+                && ps[6].ParameterType == typeof(float) && ps[7].ParameterType == typeof(long)
+                && ps.Skip(8).All(p => p.HasDefaultValue);
+        });
+
+    int CallSpawnPlatoon(int faction, string template, int site, Vector2 at, float minRadius, float maxRadius, long money = 0)
+    {
+        if (SpawnPlatoonMethod is null) return -1;
+        var ps = SpawnPlatoonMethod.GetParameters();
+        var args = new object?[ps.Length];
+        args[0] = world; args[1] = faction; args[2] = template; args[3] = site;
+        args[4] = at; args[5] = minRadius; args[6] = maxRadius; args[7] = money;
+        for (int i = 8; i < ps.Length; i++) args[i] = ps[i].DefaultValue;
+        return SpawnPlatoonMethod.Invoke(population, args) is int id ? id : -1;
+    }
+
     public bool CanGiveBack => Despawn?.ReturnType == typeof(bool);
 
     public bool GiveBack(int squad)
@@ -64,7 +91,7 @@ public sealed class EngineSquads(Meitou.Simulation.World world, PopulationSystem
         if (faction < 0 || faction >= gameFaction.Length || gameFaction[faction] < 0) return Refuse($"faction {faction} has no game faction");
         int site = siteOfPlace.TryGetValue(home, out int s) ? s : siteOfPlace.Values.DefaultIfEmpty(-1).First();
         if (site < 0) return Refuse($"no game town for place {home}");
-        int id = population.SpawnPlatoon(world, gameFaction[faction], template, site, at, 0, SpawnRing);
+        int id = CallSpawnPlatoon(gameFaction[faction], template, site, at, 0, SpawnRing);
         if (id < 0) return Refuse($"the game would not spawn {template} at town {site}");
         if (world.Platoons.Find(id) is not { } platoon) return Refuse($"squad {id} not found after its spawn");
         LastRefusal = "";
