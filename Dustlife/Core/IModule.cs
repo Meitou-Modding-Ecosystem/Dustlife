@@ -21,5 +21,8 @@ public interface IModule
 
     void OnFightEnd(World world, Band? winner, Band? loser, IRelations rel) { }
 
+    /// <summary>True: these two bands don't fight this tick, though in reach (a siege's investment: besiegers and the defenders wait).</summary>
+    bool HoldsFire(World world, Band a, Band b) => false;
+
     void PostTick(World world, float dt, IRelations rel) { }
 }

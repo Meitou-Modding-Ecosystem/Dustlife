@@ -65,6 +65,7 @@ public sealed class WastelandLink(Func<Type?>? find = null)
         {
             EventType.Capture when e.B >= 0 && e.Key.StartsWith("took", StringComparison.Ordinal) => ("town-fell", "", weight),
             EventType.Rout when e.Key == "siege_end" => ("siege-broken", "", 55),
+            EventType.SiegeBegan => ("siege-began", "", e.Importance >= 2 ? 60 : 45),   // TWR has its own line for it
             EventType.Invasion when e.Key is "march" or "raid" => ("war-" + e.Key, w.Say(e), weight),
             _ => null,
         };
@@ -117,7 +118,7 @@ public sealed class WastelandLink(Func<Type?>? find = null)
         int count = br.ReadInt32();
         if (count < 0 || count > MaxSaved) throw new InvalidDataException($"{count} saved overruns");
         var rows = new List<(string Place, string Holder, double Hours)>();
-        for (int i = 0; i < count; i++) rows.Add((br.ReadString(), br.ReadString(), br.ReadDouble()));
+        for (int i = 0; i < count; i++) rows.Add((Text(br), Text(br), br.ReadDouble()));
         foreach (var (placeKey, holderKey, hours) in rows)
         {
             if (!double.IsFinite(hours) || w.Places.Find(p => p.Key == placeKey) is not { } p) continue;
@@ -129,8 +130,24 @@ public sealed class WastelandLink(Func<Type?>? find = null)
         return _overrun.Count;
     }
 
+    /// <summary>A saved string; a damaged length (BinaryReader's FormatException) is a damaged save, as the system catches it.</summary>
+    internal static string Text(BinaryReader br)
+    {
+        try
+        {
+            return br.ReadString();
+        }
+        catch (FormatException e)
+        {
+            throw new InvalidDataException("damaged text in the save: " + e.Message, e);
+        }
+    }
+
     /// <summary>The overruns waiting for their settling (for the tests and the log).</summary>
     public int Pending => _overrun.Count;
+
+    /// <summary>Forgets every waiting overrun (a damaged section in the save, <see cref="LinkSave"/>).</summary>
+    public void Clear() => _overrun.Clear();
 
     #endregion
 

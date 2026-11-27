@@ -1,0 +1,181 @@
+# Dustlife for Meitou: known bugs the fuzz harness must catch (PZAMeitouUi\fuzz\mutate.py). Author: PZA. One block per mutant, verbatim.
+# Header: ID | file from the folder that holds the repos | fuzz targets to run | what it plants
+
+@@ DL-cap | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | one squad more than the cap handed over
+<<<
+        if (_squadOf.Count >= Cfg.MaxSquads)
+===
+        if (_squadOf.Count > Cfg.MaxSquads)
+>>>
+
+@@ DL-cooldown | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | a band given back is handed over again at once
+<<<
+            if (_cooldownUntil.TryGetValue(b.Id, out long until) && Syncs <= until) continue;
+===
+            if (_cooldownUntil.TryGetValue(b.Id, out long until) && Syncs < 0) continue;
+>>>
+
+@@ DL-back-external | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | a band given back stays external (no squad, never simulated again)
+<<<
+        b.External = false;                                    // the band walks on in the simulation from where its squad was
+===
+        // the band walks on in the simulation from where its squad was
+>>>
+
+@@ DL-loose-forever | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | API 2: a squad let loose while loaded is never held again
+<<<
+            host.SetHeld(squad, true);
+            host.Send(squad, b.TargetPos);
+===
+            host.Send(squad, b.TargetPos);
+>>>
+
+@@ DL-api3-release | DustlifeMeitou\Dustlife\Game\Squads.cs | squads.handover | API 3: the hold is released anyway (the squad would roam its town's trips off screen)
+<<<
+            if (host.HoldStopsLoaded) LetLoadedAct(host, b, squad);
+===
+            LetLoadedAct(host, b, squad);
+>>>
+
+@@ DL-save-eof | DustlifeMeitou\Dustlife\Core\Save.cs | save.read | a cut-off save throws EndOfStreamException (an IOException), which the system doesn't catch
+<<<
+        catch (Exception e) when (e is EndOfStreamException or IOException or ArgumentException or OverflowException or FormatException)
+===
+        catch (Exception e) when (e is ArgumentException or OverflowException or FormatException)
+>>>
+
+@@ DL-twr-no-holder | DustlifeMeitou\Dustlife\Game\WastelandLink.cs | twr.read | an overrun with no old holder is dropped (it would never become a fall)
+<<<
+            _overrun[p.Id] = (hours, holder);
+===
+            if (holder >= 0) _overrun[p.Id] = (hours, holder);
+>>>
+
+@@ DL-outlaw-unknown | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | an outlaw the squad hasn't heard of is struck
+<<<
+        if (!Get(row, "Known", false))
+===
+        if (false)
+>>>
+
+@@ DL-outlaw-grace | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | a new outlaw or boss struck in its first week
+<<<
+        if (double.IsFinite(after) ? now < after : now - since < GraceHours)
+===
+        if (double.IsFinite(after) ? now < after : now - since < 1)
+>>>
+
+@@ DL-outlaw-month | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | the same outlaw struck again inside 30 days
+<<<
+        if ((_lastStrike.TryGetValue(name, out double last) && now - last < CooldownHours) ||
+===
+        if ((_lastStrike.TryGetValue(name, out double last) && now - last < 24) ||
+>>>
+
+@@ DL-outlaw-wounded | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | a wounded outlaw struck again
+<<<
+        if (status is not ("alive" or "succeeded") || Get(row, "Mood", "") == "wounded")
+===
+        if (status is not ("alive" or "succeeded"))
+>>>
+
+@@ DL-outlaw-newboss | DustlifeMeitou\Dustlife\Game\OutlawLink.cs | outlaw.strike | a successor inherits the first boss's clock (struck in its own first week)
+<<<
+        double since = _firstSeen.GetValueOrDefault(name + "|" + Boss(name, row), now);
+===
+        double since = _firstSeen.Where(e => e.Key.StartsWith(name + "|", StringComparison.Ordinal)).Select(e => e.Value).DefaultIfEmpty(now).Min();
+>>>
+
+@@ DL-save-text | DustlifeMeitou\Dustlife\Game\WastelandLink.cs | outlaw.read,twr.read | a damaged string length throws FormatException, which the load doesn't catch (Dustlife off for the world)
+<<<
+        catch (FormatException e)
+===
+        catch (FormatException e) when (e.Data.Count < 0)
+>>>
+
+@@ DL-link-kept | DustlifeMeitou\Dustlife\Game\LinkSave.cs | link.read | a damaged outlaw section reports no overruns while the link keeps them (the log says none kept)
+<<<
+            return new(waiting, 0, $"the save's outlaw
+===
+            return new(0, 0, $"the save's outlaw
+>>>
+
+@@ DL-link-stale | DustlifeMeitou\Dustlife\Game\LinkSave.cs | link.read | a damaged overrun section leaves the earlier load's outlaw times in place
+<<<
+            twr.Clear();
+            outlaws.Clear();
+===
+            twr.Clear();
+>>>
+
+@@ DL-siege-early | DustlifeMeitou\Dustlife\Modules\Warfare.cs | siege.clock | a place is ready to fall at a quarter of its endurance
+<<<
+        if (s.Phase == 2 && t >= s.Endurance)
+===
+        if (s.Phase == 2 && t >= s.Endurance / 4)
+>>>
+
+@@ DL-siege-fire | DustlifeMeitou\Dustlife\Modules\Warfare.cs | siege.clock | besiegers and defenders still hold fire once the place is ready to fall (it never falls)
+<<<
+        return other.Faction == t.Owner && w.Settled(other, t.Id) && t.Id < Ps.Count && Ps[t.Id].Phase < 3;
+===
+        return other.Faction == t.Owner && w.Settled(other, t.Id) && t.Id < Ps.Count && Ps[t.Id].Phase <= 3;
+>>>
+
+@@ DL-siege-guard | DustlifeMeitou\Dustlife\Modules\Warfare.cs | siege.clock | a home town is overrun as soon as it is invested (the old one-day falls)
+<<<
+                if (Cfg.Sieges ? s.Phase < 3 : w.Now - s.SiegeSince < Cfg.HomeGuardHours) continue;   // F1: until ready to fall
+===
+                if (Cfg.Sieges ? s.Phase < 1 : w.Now - s.SiegeSince < Cfg.HomeGuardHours) continue;   // F1: until ready to fall
+>>>
+
+@@ DL-siege-reset | DustlifeMeitou\Dustlife\Modules\Warfare.cs | siege.clock | a lifted siege keeps its clock (the next siege starts already starving)
+<<<
+            if (s.Invested >= 0) (s.Invested, s.Endurance, s.Phase) = (-1, 0, 0);
+===
+            if (false) (s.Invested, s.Endurance, s.Phase) = (-1, 0, 0);
+>>>
+
+@@ DL-hold-off | DustlifeMeitou\Dustlife\Modules\Warfare.cs | siege.clock | no hold time at all: a place just taken is marched on again at once (the seesaw). (A mutant removing only one of the two hold checks in StageInvasion is equivalent: the other catches it.)
+<<<
+    bool Held(World w, Place o) => Cfg.HoldHours > 0 && o.Id < Ps.Count && Ps[o.Id].HoldUntil > w.Now;
+===
+    bool Held(World w, Place o) => false;
+>>>
+
+@@ DL-rhythm-gate | DustlifeMeitou\Dustlife\Modules\Warfare.cs | war.rhythm | a worn-out faction keeps attacking (no rest at all)
+<<<
+    public bool Resting(int faction) => Cfg.Rhythm && faction >= 0 && faction < Fs.Count && Fs[faction].Phase != WarPhase.Offensive;
+===
+    public bool Resting(int faction) => false;
+>>>
+
+@@ DL-rhythm-mindays | DustlifeMeitou\Dustlife\Modules\Warfare.cs | war.rhythm | a truce the moment it's rested, without the minimum days exhausted
+<<<
+                case WarPhase.Exhausted when s.Weariness <= Cfg.RestedAt && w.Now - s.PhaseSince >= 24.0 * Cfg.MinExhaustedDays:
+===
+                case WarPhase.Exhausted when s.Weariness <= Cfg.RestedAt:
+>>>
+
+@@ DL-rhythm-rested | DustlifeMeitou\Dustlife\Modules\Warfare.cs | war.rhythm | a truce while still worn out
+<<<
+                case WarPhase.Exhausted when s.Weariness <= Cfg.RestedAt && w.Now - s.PhaseSince >= 24.0 * Cfg.MinExhaustedDays:
+===
+                case WarPhase.Exhausted when s.Weariness <= 1e6 && w.Now - s.PhaseSince >= 24.0 * Cfg.MinExhaustedDays:
+>>>
+
+@@ DL-rhythm-standdown | DustlifeMeitou\Dustlife\Modules\Warfare.cs | war.rhythm | an invasion mustered before the faction wore out still marches (the bug war.rhythm found: the rest only stopped new staging)
+<<<
+        if (Resting(f))
+        {
+===
+        if (s.InvTarget < 0 && Resting(f))
+        {
+>>>
+
+@@ DL-rhythm-save | DustlifeMeitou\Dustlife\Modules\Warfare.cs | war.rhythm | a load forgets the war's rhythm (the restore-order bug WarRhythmTests found)
+<<<
+                if (id >= 0 && id < Fs.Count) (Fs[id].Weariness, Fs[id].PhaseSince, Fs[id].TruceEnds, Fs[id].Phase, Fs[id].LostSeen) = (wear, since, truce, ph, seen);
+===
+                if (false) (Fs[id].Weariness, Fs[id].PhaseSince, Fs[id].TruceEnds, Fs[id].Phase, Fs[id].LostSeen) = (wear, since, truce, ph, seen);
+>>>

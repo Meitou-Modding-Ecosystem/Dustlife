@@ -22,6 +22,24 @@ public interface ISquadHost
 
     /// <summary>Every squad with a Dustlife tag (after a load: squad ids are new, the tags are kept).</summary>
     IEnumerable<(int Squad, string Tag)> Tagged();
+
+    /// <summary>Whether this game can take a squad back (Meitou's <c>PopulationSystem.DespawnPlatoon</c>); false: squads stay the game's for good.</summary>
+    bool CanGiveBack => false;
+
+    /// <summary>Removes the squad from the game so its band goes back to Dustlife; false when the game refused (or can't).</summary>
+    bool GiveBack(int squad) => false;
+
+    /// <summary>Whether the squad's characters exist in the world now (someone may be watching), as opposed to a stand-in.</summary>
+    bool Loaded(int squad) => true;
+
+    /// <summary>
+    /// Whether a hold also stops a loaded squad's members (code-mod API 1 and 2, Meitou 0.22.1 and older: the mod must then walk them). Since
+    /// API 3 a hold is off screen only and loaded members run their own package.
+    /// </summary>
+    bool HoldStopsLoaded => false;
+
+    /// <summary>Holds or releases the squad (a release lets its members' own minds run while loaded).</summary>
+    void SetHeld(int squad, bool held) { }
 }
 
 /// <summary>The hand-over's numbers.</summary>
@@ -31,6 +49,16 @@ public sealed class SquadConfig
     public float HandOverRadius = 7000, MinRadius = 2500;
     /// <summary>At most this many bands are the game's squads at once, and one more per sync.</summary>
     public int MaxSquads = 4;
+    /// <summary>
+    /// With a game that can take squads back: a squad farther than this from all of the player's people for <see cref="FarSyncs"/> syncs in a
+    /// row goes back to Dustlife (beyond the hand-over radius, so a band at the edge doesn't flip back and forth).
+    /// </summary>
+    public float GiveBackRadius = 9000;
+    public int FarSyncs = 4;
+    /// <summary>A squad within this of its band's goal while nobody can see it (a stand-in) goes back to Dustlife, which settles the arrival.</summary>
+    public float GoalRadius = 500;
+    /// <summary>A band given back isn't handed over again for this many syncs (about a game day).</summary>
+    public int CooldownSyncs = 96;
     /// <summary>Squad templates by faction key: an invader's and a patrol's.</summary>
     public Dictionary<string, (string Invader, string Patrol)> Templates = [];
 }
@@ -39,20 +67,39 @@ public sealed class SquadConfig
 /// Hands Dustlife's bands to the game as real squads near the player (port step 5c), the KVS fidelity step: a marching invader or patrol
 /// within <see cref="SquadConfig.HandOverRadius"/> becomes the game's squad of its faction's war template, tagged <c>dustlife:&lt;band&gt;</c>,
 /// walking to the band's goal. The band is then external: its position and losses come from the squad, and if the squad is gone the band
-/// is gone. The engine has no despawn, so a squad stays the game's for good; that is why only marching bands near the player are handed
-/// over, and never more than a few.
+/// is gone. Only marching bands near the player are handed over, and never more than a few. Where the game can take a squad back
+/// (<see cref="ISquadHost.CanGiveBack"/>, Meitou's <c>DespawnPlatoon</c>), a squad that has walked far from the player's people, or reached
+/// its goal unseen, goes back to Dustlife and its band runs on in the simulation; without it a squad stays the game's for good.
 /// </summary>
 public sealed class Squads(SquadConfig cfg)
 {
     public const string TagPrefix = "dustlife:";
     readonly Dictionary<int, int> _squadOf = [];
     readonly Dictionary<int, Vector2> _goalOf = [];
+    readonly Dictionary<int, int> _farFor = [];
+    readonly Dictionary<int, long> _cooldownUntil = [];
     bool _relinked;
 
     public SquadConfig Cfg { get; } = cfg;
 
+    /// <summary>The shared limits a hand-over asks first (Rivalry Core's, <see cref="RivalryLink"/>); null: Dustlife's own cap only.</summary>
+    public IHandOverGate? Gate { get; set; }
+
+    /// <summary>Bands in the ring the gate held back (each waits its turn while a farther one may go).</summary>
+    public long HeldByGate;
+
     /// <summary>Bands handed over, bands lost with their squad, squads found again after a load (a rule that never fires is a failed test).</summary>
     public long HandedOver, LostWithSquad, Relinked;
+
+    /// <summary>Squads given back to Dustlife: far from the player, or at their goal unseen; and the game refusing one.</summary>
+    public long GivenBackFar, GivenBackAtGoal, GiveBackRefused;
+
+    /// <summary>Loaded squads released so their own minds run (API 1 and 2 only), and held again once unloaded.</summary>
+    public long ReleasedLoaded, HeldAgain;
+    readonly HashSet<int> _released = [];
+
+    /// <summary>Whether the game could take squads back at the last sync.</summary>
+    public bool CanGiveBack;
 
     /// <summary>
     /// Why no band was handed over (each sync counts one reason): nobody of the player's, the cap reached, no marching invader or patrol,
@@ -74,12 +121,17 @@ public sealed class Squads(SquadConfig cfg)
     /// <summary>
     /// One sync: find the squads again (first sync after a start or load), follow the handed-over bands' squads, hand over new ones.
     /// </summary>
+    IReadOnlyList<Vector2> _players = [];
+
     public void Sync(World w, ISquadHost host, IReadOnlyList<Vector2> players)
     {
         Syncs++;
+        _players = players;
+        CanGiveBack = host.CanGiveBack;
         if (!_relinked) Relink(w, host);
         Follow(w, host);
         HandOver(w, host, players);
+        Gate?.EndSync(w);
     }
 
     void Relink(World w, ISquadHost host)
@@ -89,7 +141,14 @@ public sealed class Squads(SquadConfig cfg)
         foreach (var (squad, tag) in host.Tagged())
         {
             int band = BandOf(tag);
-            if (w.FindBand(band) is { Alive: true, External: true } b) { _squadOf[b.Id] = squad; _goalOf[b.Id] = b.TargetPos; Relinked++; }
+            if (w.FindBand(band) is { Alive: true, External: true } b)
+            {
+                _squadOf[b.Id] = squad;
+                _goalOf[b.Id] = b.TargetPos;
+                host.SetHeld(squad, true);                          // an unnamed hold isn't saved: hold and send it again after a load
+                host.Send(squad, b.TargetPos);
+                Relinked++;
+            }
         }
 
         // an external band whose squad the save no longer has was beaten (the game removes a squad whose members all died): never re-place it
@@ -104,6 +163,11 @@ public sealed class Squads(SquadConfig cfg)
             if (host.Look(squad) is not { Dead: false } s || s.Size <= 0) { Lose(w, b); continue; }
             b.Size = Math.Min(b.Size, s.Size);
             b.Pos = s.Pos;
+            float d = _players.Count > 0 ? _players.Min(p => Vector2.Distance(p, b.Pos)) : float.MaxValue;
+            if (host.HoldStopsLoaded) LetLoadedAct(host, b, squad);
+            if (CanGiveBack && TryGiveBack(host, b, squad, d)) continue;
+            Gate?.InGame(w, b, d <= Cfg.HandOverRadius);
+            if (_released.Contains(bandId)) continue;              // loaded and its own: no off-screen goal to send
             if (_goalOf.GetValueOrDefault(bandId) != b.TargetPos && b.State is BandState.Moving or BandState.Retreat)
             {
                 host.Send(squad, b.TargetPos);
@@ -112,10 +176,58 @@ public sealed class Squads(SquadConfig cfg)
         }
     }
 
+    /// <summary>
+    /// On API 1 and 2 a held squad that loads would stand still until the mod walked its members (the 2026-11-21 runs: four squads near
+    /// Stack "in the game now" for 26 days, never in a fight). So while it is loaded it is released and its members' own minds run (they
+    /// fight what they meet); once it is a stand-in again it is held and sent to its band's goal.
+    /// </summary>
+    void LetLoadedAct(ISquadHost host, Band b, int squad)
+    {
+        bool loaded = host.Loaded(squad);
+        if (loaded && _released.Add(b.Id))
+        {
+            host.SetHeld(squad, false);
+            ReleasedLoaded++;
+        }
+        else if (!loaded && _released.Remove(b.Id))
+        {
+            host.SetHeld(squad, true);
+            host.Send(squad, b.TargetPos);
+            _goalOf[b.Id] = b.TargetPos;
+            HeldAgain++;
+        }
+    }
+
+    bool TryGiveBack(ISquadHost host, Band b, int squad, float nearest)
+    {
+        int far = nearest > Cfg.GiveBackRadius ? _farFor.GetValueOrDefault(b.Id) + 1 : 0;
+        _farFor[b.Id] = far;
+        bool atGoal = Vector2.Distance(b.Pos, b.TargetPos) <= Cfg.GoalRadius && !host.Loaded(squad);
+        if (far < Cfg.FarSyncs && !atGoal) return false;
+        if (!host.GiveBack(squad))
+        {
+            GiveBackRefused++;
+            return false;
+        }
+
+        if (atGoal) GivenBackAtGoal++;
+        else GivenBackFar++;
+        _squadOf.Remove(b.Id);
+        _goalOf.Remove(b.Id);
+        _farFor.Remove(b.Id);
+        _released.Remove(b.Id);
+        _cooldownUntil[b.Id] = Syncs + Cfg.CooldownSyncs;
+        b.External = false;                                    // the band walks on in the simulation from where its squad was
+        Gate?.Gone(b);
+        return true;
+    }
+
     void Lose(World w, Band b)
     {
         _squadOf.Remove(b.Id);
+        _released.Remove(b.Id);
         LostWithSquad++;
+        Gate?.Gone(b);
         w.Kill(b);
     }
 
@@ -133,23 +245,24 @@ public sealed class Squads(SquadConfig cfg)
             return;
         }
 
-        Band? pick = null;
-        float best = float.MaxValue, nearest = float.NaN;
+        var ring = new List<(float D, Band B)>();
+        float nearest = float.NaN;
         bool marching = false, templated = false;
         foreach (var b in w.Bands)
         {
             if (!b.Alive || b.External || b.Owner != "warfare" || b.State != BandState.Moving || b.Role is not (BandRole.Invader or BandRole.Patrol)) continue;
+            if (_cooldownUntil.TryGetValue(b.Id, out long until) && Syncs <= until) continue;
             marching = true;
             if (!Cfg.Templates.ContainsKey(w.Factions[b.Faction].Key)) continue;
             templated = true;
             float d = players.Min(p => Vector2.Distance(p, b.Pos));
             if (!(d >= nearest)) nearest = d;
-            if (d > Cfg.HandOverRadius || d < Cfg.MinRadius || d >= best) continue;
-            (best, pick) = (d, b);
+            if (d > Cfg.HandOverRadius || d < Cfg.MinRadius) continue;
+            ring.Add((d, b));
         }
 
         Nearest = nearest;
-        if (pick == null)
+        if (ring.Count == 0)
         {
             if (!marching) NoMarching++;
             else if (!templated) NoTemplate++;
@@ -157,12 +270,15 @@ public sealed class Squads(SquadConfig cfg)
             return;
         }
 
+        if (Pick(w, ring) is not { } pick) return;
+
         var (invader, patrol) = Cfg.Templates[w.Factions[pick.Faction].Key];
         string template = pick.Role == BandRole.Invader ? invader : patrol;
         int squad = host.Spawn(pick.Faction, template, pick.Home, pick.Pos, pick.TargetPos, TagOf(pick));
         if (squad < 0)
         {
             SpawnRefused++;
+            Gate?.Gone(pick);                                  // a win the gate gave for a squad that never came: give it back now
             return;
         }
 
@@ -172,12 +288,34 @@ public sealed class Squads(SquadConfig cfg)
         HandedOver++;
     }
 
+    /// <summary>
+    /// The nearest band in the ring that the gate lets go; a band it holds back waits its turn and the next one is asked, so a hostile band
+    /// waiting for Rivalry Core doesn't keep a band that needs nothing from coming. Null when the gate held them all.
+    /// </summary>
+    Band? Pick(World w, List<(float D, Band B)> ring)
+    {
+        foreach (var (_, b) in ring.OrderBy(r => r.D).ThenBy(r => r.B.Id))
+        {
+            if (Gate == null || Gate.MayHandOver(w, b)) return b;
+
+            HeldByGate++;
+        }
+
+        return null;
+    }
+
+    string GiveBackText() => CanGiveBack
+        ? FormattableString.Invariant($"{GivenBackFar + GivenBackAtGoal} given back ({GivenBackFar} far from the player, {GivenBackAtGoal} at their goal), {GiveBackRefused} refused")
+        : "none given back (this Meitou can't take a squad back)";
+
+    string LoadedText() => FormattableString.Invariant($"{ReleasedLoaded} let loose while loaded, {HeldAgain} held again");
+
     /// <summary>One line for the log: what the hand-over did and why it didn't.</summary>
     public string Summary(string? refusal)
     {
         string near = float.IsNaN(Nearest) ? "none" : Nearest.ToString("0", CultureInfo.InvariantCulture);
         string last = string.IsNullOrEmpty(refusal) ? "" : " (last: " + refusal + ")";
         return FormattableString.Invariant(
-            $"real squads: {HandedOver} handed over, {_squadOf.Count} in the game now, {LostWithSquad} lost with their squad, {Relinked} found again; of {Syncs} syncs: {NoPlayers} with none of the player's people, {AtCap} at the cap of {Cfg.MaxSquads}, {NoMarching} with no band marching, {NoTemplate} with no squad template, {OutOfRing} with none {Cfg.MinRadius:0} to {Cfg.HandOverRadius:0} away (nearest {near}), {SpawnRefused} spawns refused{last}");
+            $"real squads: {HandedOver} handed over, {_squadOf.Count} in the game now, {LostWithSquad} lost with their squad, {Relinked} found again, {GiveBackText()}, {LoadedText()}; of {Syncs} syncs: {NoPlayers} with none of the player's people, {AtCap} at the cap of {Cfg.MaxSquads}, {NoMarching} with no band marching, {NoTemplate} with no squad template, {OutOfRing} with none {Cfg.MinRadius:0} to {Cfg.HandOverRadius:0} away (nearest {near}), {SpawnRefused} spawns refused{last}, {HeldByGate} held back by the shared limits");
     }
 }

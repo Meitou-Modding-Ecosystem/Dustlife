@@ -1,5 +1,6 @@
-# Moves meitou.lock.json to new framework releases: builds and tests, opens a PR into beta and merges it when CI is green
-# (GutenStructure docs/framework-update.md). A failing PR stays open as the regression report. Nothing to do while the lock is empty.
+# Moves meitou.lock.json to new framework beta releases: builds and tests, opens a PR into main (Dustlife has no beta branch) and runs
+# CI on it; a maintainer reviews and merges it (merge: false; GutenStructure docs/framework-update.md). A failing PR is the regression
+# report. The beta channel tests every Rivalry Core beta snapshot here within 6 hours (GutenStructure docs/versioning.md).
 name: Framework update
 
 on:
@@ -17,3 +18,7 @@ jobs:
       pull-requests: write
       actions: write
     uses: TheIvoryDisaster/GutenStructure/.github/workflows/framework-update.yml@7bbd01b87f8980f40af7c7f832bc2f038f7ab56d
+    with:
+      channel: beta
+      base: main
+      merge: false

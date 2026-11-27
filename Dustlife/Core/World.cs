@@ -29,6 +29,8 @@ public sealed class World
     public List<WorldEvent> Events { get; } = [];
     /// <summary>The war's history: every event of importance 2 or more, oldest first (the last 400 at most).</summary>
     public List<WorldEvent> Chronicle { get; } = [];
+    /// <summary>Warlords who rode out of their band's rout (<see cref="CoreConfig.WarlordsSurvive"/>).</summary>
+    public long WarlordEscapes;
     /// <summary>Game hours.</summary>
     public double Now { get; private set; }
     public double LastTick { get; private set; } = -1;
@@ -465,7 +467,10 @@ public sealed class World
             if (cur[fi] is { } sitting)
             {
                 f.WarlordName = FullName(sitting.Leader);
-                if (best[fi] is { } challenger && challenger != sitting && challenger.Leader.Renown > sitting.Leader.Renown * 1.25f + 2.0f)
+                // F1 (WarlordsSurvive): a challenger must outshine the sitting warlord by far more (the early renowns are small, and the old
+                // margin let five warlords follow each other in the first days of every run)
+                float margin = Cfg.WarlordsSurvive ? sitting.Leader.Renown * 1.5f + 6.0f : sitting.Leader.Renown * 1.25f + 2.0f;
+                if (best[fi] is { } challenger && challenger != sitting && challenger.Leader.Renown > margin)
                 {
                     f.Warlord = challenger.Leader.Id;
                     f.WarlordName = FullName(challenger.Leader);
@@ -584,6 +589,16 @@ public sealed class World
 
         if (w.Size <= 0)
         {
+            if (Cfg.WarlordsSurvive && w.Leader.Id > 0 && Factions[w.Faction].Warlord == w.Leader.Id && Rng.Chance(0.75f)
+                && Bands.Where(o => o != w && o.Alive && o.Faction == w.Faction && !o.External).OrderByDescending(o => o.Power).ThenBy(o => o.Id).FirstOrDefault() is { } refuge)
+            {
+                // the war host's leader rides out of the rout and takes command of the strongest band left (F1: commanders last)
+                refuge.Leader = w.Leader;
+                w.Leader = MakeLeader(w.Faction);
+                WarlordEscapes++;
+                Emit(EventType.Warlord, w.Faction, -1, -1, refuge.Pos, 1, "warlord_escaped", FullName(refuge.Leader), Factions[w.Faction].Name);
+            }
+
             Kill(w);
             if (killer != null)
                 Emit(EventType.Wiped, killer.Faction, w.Faction, -1, w.Pos, 1, "wiped_by", FullName(w.Leader), Factions[w.Faction].Name,
@@ -594,6 +609,7 @@ public sealed class World
 
         // battle scars (KVS): the leader may fall, or come out scarred and harder
         float leaderRisk = 0.5f * n / before / w.Leader.Toughness;
+        if (Cfg.WarlordsSurvive && w.Leader.Id > 0 && Factions[w.Faction].Warlord == w.Leader.Id) leaderRisk *= 0.25f;   // he leads from behind the line
         if (Rng.Chance(leaderRisk))
         {
             string old = FullName(w.Leader);
@@ -669,6 +685,12 @@ public sealed class World
     /// <summary>
     /// Hostile bands within the combat radius fight, each band at most once a tick (two retreating bands let each other go).
     /// </summary>
+    bool HoldsFire(Band a, Band b)
+    {
+        foreach (var m in _modules) if (m.HoldsFire(this, a, b)) return true;
+        return false;
+    }
+
     void Combat(IRelations rel)
     {
         var fought = new bool[Bands.Count];
@@ -683,6 +705,7 @@ public sealed class World
                 if (!b.Alive || fought[j] || Asleep(b) || b.External || a.Faction == b.Faction) continue;
                 if (a.State == BandState.Retreat && b.State == BandState.Retreat) continue;
                 if (Vector2.DistanceSquared(a.Pos, b.Pos) > r2 || !Hostile(a.Faction, b.Faction, rel)) continue;
+                if (HoldsFire(a, b)) continue;
                 fought[i] = fought[j] = true;
                 Fight(a, b, rel);
                 break;

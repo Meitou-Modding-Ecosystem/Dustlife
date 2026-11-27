@@ -202,6 +202,8 @@ public enum EventType
     Escape,
     Rival,
     Warlord,
+    /// <summary>The first band of an attacker began a siege of a place (added for the war story, F0; appended so saves keep their numbers).</summary>
+    SiegeBegan,
 }
 
 /// <summary>
@@ -234,6 +236,11 @@ public sealed class CoreConfig
     public float ExternalArrival = 1500;
     /// <summary>Every faction hostile to every other.</summary>
     public bool AllOutWar;
+    /// <summary>
+    /// F1: a war host's leader leads from behind the line (a quarter of the risk of falling in a fight) and, when his band is wiped, rides
+    /// out three times in four and takes the strongest band left. Off = the reference's rules.
+    /// </summary>
+    public bool WarlordsSurvive;
 }
 
 /// <summary>

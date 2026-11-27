@@ -1,8 +1,9 @@
 {
   "id": "pza.dustlife",
-  "version": "0.4.5",
+  "version": "0.7.0",
   "gameVersion": ">=0.21.0",
   "apiVersion": 2,
   "assemblies": ["Dustlife.dll"],
-  "entry": "Dustlife.DustlifeMod"
+  "entry": "Dustlife.DustlifeMod",
+  "dependencies": [{ "id": "rivalry.core", "version": ">=0.6.0 <0.7.0", "optional": true }]
 }
